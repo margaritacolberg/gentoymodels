@@ -1,3 +1,9 @@
+# adjoint.py is a 1D toy implementation of adjoint sampling, based on
+# pseudocode on p. 6 from Havens et al.'s preprint "Adjoint Sampling: Highly
+# Scalable Diffusion Samplers via Adjoint Matching"; in this program, a drift
+# function in an SDE is trained to sample from a 1D Boltzmann distribution
+# using the adjoint matching algorithm
+
 import argparse
 import math
 import matplotlib.pyplot as plt
@@ -6,6 +12,7 @@ import random
 import torch
 
 from model import *
+
 
 def main(args):
     dt = 0.001
@@ -34,7 +41,7 @@ def main(args):
     model, optimizer = load_model(input_size, args.hidden_size, output_size, \
             args.lr)
 
-    for j in range(50):
+    for j in range(args.epochs):
         X1_list = []
         grad_g_list = []
         for _ in range(n_paths):
@@ -92,8 +99,13 @@ def main(args):
     # normalize Boltzmann distribution
     mu /= np.trapezoid(mu, x_th)
 
+    mean_th = np.trapezoid(mu * x_th, x_th)
+    var_th = np.trapezoid(mu * (x_th - mean_th)**2, x_th)
+
     print('Mean: {}, std: {} of ML-predicted Boltzmann distribution'.format( \
             np.mean(X1_val), np.std(X1_val)))
+    print('Mean: {}, std: {} of theoretical Boltzmann distribution'.format( \
+            mean_th, np.sqrt(var_th)))
 
     plt.hist(X1_val, bins=500, density=True, label=r'ML $\mu$')
     plt.plot(x_th, mu, label='Theoretical')
@@ -166,6 +178,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hidden_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--epochs', type=int, default=10)
 
     args = parser.parse_args()
 

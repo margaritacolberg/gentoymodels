@@ -1,4 +1,8 @@
-
+# ddpm.py is a 1D toy implementation of DDPM, based on Pseudocode 1 and 2 on p.
+# 11 from Nakkiran et al.'s "Step-by-Step Diffusion: An Elementary Tutorial";
+# in this program, a neural net is trained to denoise x_{t+dt} to predict x_t
+# during the forward process, and the forward process is then reversed for
+# sampling
 
 import argparse
 import math
@@ -22,7 +26,7 @@ def main(args):
     # var of Gaussian distribution
     sigma_q = 1
 
-    batch_size = 256
+    batch_size = 128
 
     # inputs: x_{t+dt}, t+dt
     input_size = 2
@@ -48,15 +52,22 @@ def main(args):
     # normalize Boltzmann distribution
     mu /= np.trapezoid(mu, x_th)
 
+    mean_th = np.trapezoid(mu * x_th, x_th)
+    var_th = np.trapezoid(mu * (x_th - mean_th)**2, x_th)
+
     x_calc = []
     for _ in range(5000):
+        # noise sample at t = 1
         x = np.random.normal(0, sigma_q)
         for t in t_path[1:]:
+            # reverse one diffusion step using Bayes-derived f(x, t)
             x = sanity_check(x, t, sigma_q)
         x_calc.append(x)
 
     print('Mean: {}, std: {} of ML-predicted Boltzmann distribution'.format( \
             np.mean(x0_val), np.std(x0_val)))
+    print('Mean: {}, std: {} of theoretical Boltzmann distribution'.format( \
+            mean_th, np.sqrt(var_th)))
 
     plt.hist(x0_val, bins=500, density=True, label=r'ML $\mu$')
     plt.hist(x_calc, bins=500, density=True, label=r'Calculated')
