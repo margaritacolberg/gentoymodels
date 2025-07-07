@@ -80,7 +80,7 @@ def main(args):
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
-    model = MLP(input_dim, hidden_dim, output_dim)
+    model = MLP_ddpm(input_dim, hidden_dim, output_dim)
     loss_fnc = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 

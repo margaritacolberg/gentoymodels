@@ -15,7 +15,7 @@ from model import *
 
 
 def main(args):
-    dt = 0.001
+    dt = 0.01
     t_0 = 0.
     t_1 = 1.
     num_t = int(t_1 / dt)
@@ -24,28 +24,34 @@ def main(args):
     tau = 1
     buffer = []
 
-    batch_size = 64 
-    n_paths = 200
-    n_inner_loop = 20
+    batch_size = 64
+    n_paths = 100
+    n_inner_loop = 10
 
-    # use var-exploding schedule; add dt to avoid zero noise at t = 0
-    sigma = lambda time: time + dt
+    # use var-exploding schedule
+    sigma_min = 0.05
+    sigma_max = 1.0
+    sigma_diff = sigma_max / sigma_min
+    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
+            * (2 * np.log(sigma_diff))**0.5
 
     u = np.zeros(num_t)
 
-    # inputs: Xt, t
-    input_size = 2
+    # inputs: Xt
+    input_size = 1
     # output: u(Xt, t)
     output_size = 1
 
-    model, optimizer = load_model(input_size, args.hidden_size, output_size, \
+    freqs = 3
+
+    model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, output_size, \
             args.lr)
 
     for j in range(args.epochs):
         X1_list = []
         grad_g_list = []
         for _ in range(n_paths):
-            X1 = euler_maruyama(t, model, num_t, dt, sigma)
+            X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs)
 
             # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find cumulative
             # var of full path
@@ -67,10 +73,12 @@ def main(args):
             sample_t = random.choices(t, k=batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt)
+                    sigma, dt, sigma_max, sigma_diff)
 
             assert len(Xt) == len(sample_t), \
                     'len of Xt and t vectors do not match'
+
+            sample_t = fourier(sample_t, freqs)
 
             Xt = torch.tensor(Xt, dtype=torch.float32)
             sample_t = torch.tensor(sample_t, dtype=torch.float32)
@@ -78,7 +86,10 @@ def main(args):
             weight = torch.tensor(weight, dtype=torch.float32)
 
             optimizer.zero_grad()
-            features = torch.stack((Xt, sample_t), dim=1)
+
+            Xt = Xt.view(-1, 1)
+            features = torch.cat((Xt, sample_t), dim=1)
+
             prediction = model(features)
             diff = prediction - label
             batch_loss = torch.mean(weight * (diff**2))
@@ -90,8 +101,8 @@ def main(args):
 
     X1_val = []
     # validate drift by comparing distribution of X1 to Boltzmann distribution
-    for i in range(1000):
-        X1_val.append(euler_maruyama(t, model, num_t, dt, sigma))
+    for _ in range(1000):
+        X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs))
 
     x_th = np.linspace(-5.0, 5.0, 100)
     mu = np.exp(-0.5 * x_th**2 / tau)
@@ -107,7 +118,7 @@ def main(args):
     print('Mean: {}, std: {} of theoretical Boltzmann distribution'.format( \
             mean_th, np.sqrt(var_th)))
 
-    plt.hist(X1_val, bins=500, density=True, label=r'ML $\mu$')
+    plt.hist(X1_val, bins=100, density=True, label=r'ML $\mu$')
     plt.plot(x_th, mu, label='Theoretical')
     plt.title('Validate Boltzmann distribution')
     plt.xlabel('x')
@@ -117,26 +128,28 @@ def main(args):
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
-    model = MLP(input_dim, hidden_dim, output_dim)
+    model = MLP_adjoint(input_dim, hidden_dim, output_dim)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     return model, optimizer
 
 
-def euler_maruyama(t, model, num_t, dt, sigma):
+def euler_maruyama(t, model, num_t, dt, sigma, freqs):
     # Gaussian noise term for infinitesimal step of Brownian motion
     dB = np.random.normal(0, np.sqrt(dt), size=num_t) 
 
     # Dirac distribution at t = 0
     x = np.zeros(num_t)
 
+    t_fourier = fourier(t, freqs)
+
     # Euler-Maruyama with no gradient
     # https://ipython-books.github.io/134-simulating-a-stochastic-differential-equation/
     for i in range(num_t - 1):
-        x_i_tensor = torch.tensor([x[i]], dtype=torch.float32)
-        t_i_tensor = torch.tensor([t[i]], dtype=torch.float32)
+        x_i_tensor = torch.tensor(x[i], dtype=torch.float32).unsqueeze(0)
+        t_i_tensor = torch.tensor(t_fourier[i], dtype=torch.float32)
 
-        features = torch.stack((x_i_tensor, t_i_tensor), dim=1)
+        features = torch.cat((x_i_tensor, t_i_tensor), dim=0)
 
         with torch.no_grad():
             u_theta = model(features).item()
@@ -146,14 +159,14 @@ def euler_maruyama(t, model, num_t, dt, sigma):
     return float(x[-1])
 
 
-def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt):
+def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff):
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
     # mean X1 and var 0
-    var_t = lambda t: (t**3 / 3) + t**2 * dt + t * dt**2
-    var_tot = (1 / 3) + dt + dt**2 
-    mean_Xt = lambda t, X1: (var_t(t) * X1) / var_tot
-    var_Xt = lambda t: (var_t(t) * (var_tot - var_t(t))) / var_tot
+    c_s = lambda t: sigma_diff**(-2 * t)
+    c_1 = sigma_diff**(-2)
+    mean_Xt = lambda t, X1: (c_s(t) - 1) / (c_1 - 1) * X1
+    var_Xt = lambda t: sigma_max**2 * (c_s(t) - 1) * (c_s(t) - c_1) / (c_1 - 1)
 
     Xt = []
     label = []
@@ -163,8 +176,12 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt):
         X1 = sample_buffer[i][0]
         grad_g = sample_buffer[i][1]
 
+        if var_Xt(sample_t[i]) < 0:
+            raise ValueError('Negative variance {} at t = {}'.format(var_Xt(sample_t[i]), \
+                    sample_t[i]))
+
         Xt.append(np.random.normal(mean_Xt(sample_t[i], X1), \
-                np.sqrt(var_Xt(sample_t[i]))))
+                np.sqrt(np.maximum(var_Xt(sample_t[i]), np.float32(0.0)))))
 
         label.append(-sigma(sample_t[i]) * grad_g)
 
@@ -174,11 +191,25 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt):
     return Xt, label, weight
 
 
+def fourier(t, freqs):
+    t_fourier = []
+    for i in range(len(t)):
+        t_fourier_i = []
+        for j in range(1, freqs + 1):
+            t_val = t[i]
+            t_fourier_i.append(np.cos(j * np.pi * t[i]))
+            t_fourier_i.append(np.sin(j * np.pi * t[i]))
+
+        t_fourier.append(t_fourier_i)
+
+    return np.array(t_fourier)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hidden_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=100)
 
     args = parser.parse_args()
 
