@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 import torch
+from scipy.stats import multivariate_normal
+from sklearn.preprocessing import normalize
 
 from model import *
 
@@ -28,43 +30,58 @@ def main(args):
     n_paths = 100
     n_inner_loop = 10
 
+    if args.energy_type == 'gmm':
+        # Gaussian mixture model parameters
+        mu1 = np.array([2.0, 2.0])
+        cov1 = np.array([[2.0, 0.0], [0.0, 3.0]])
+
+        mu2 = np.array([-2.0, -2.0])
+        cov2 = np.array([[1.0, 0.0], [0.0, 2.0]])
+
+        # weights
+        w1, w2 = 0.5, 0.5
+
+        sigma_max = 1.5
+    else:
+        sigma_max = 1.0
+
     # use var-exploding schedule
     sigma_min = 0.05
-    sigma_max = 1.0
     sigma_diff = sigma_max / sigma_min
     sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
             * (2 * np.log(sigma_diff))**0.5
 
     u = np.zeros(num_t)
 
+    x_vec_dim = 2
+
     # inputs: Xt
-    input_size = 1
+    input_size = x_vec_dim
     # output: u(Xt, t)
-    output_size = 1
+    output_size = x_vec_dim
 
     freqs = 3
 
-    model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, output_size, \
-            args.lr)
+    model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, \
+            output_size, args.lr)
 
     for j in range(args.epochs):
         X1_list = []
         grad_g_list = []
         for _ in range(n_paths):
-            X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs)
+            X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim)
 
-            # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find cumulative
-            # var of full path
+            # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
+            # cumulative var of full path
             var = np.sum(sigma(t)**2 * dt)
-            # E(x) = 1/2 * x^2; base distribution is multivariate normal
-            # probability density function with mean 0, since there is no drift in
-            # base process 
-            grad_g = float((-X1 / var) + (X1 / tau))
 
-            X1_list.append(X1)
-            grad_g_list.append(grad_g)
+            if args.energy_type == 'gmm':
+                grad_g = calculate_grad_g(X1, mu1, mu2, cov1, cov2, w1, w2, \
+                        tau, var, x_vec_dim)
+            else:
+                grad_g = (-X1 / var) + (X1 / tau)
 
-        for pair in zip(X1_list, grad_g_list):
+            pair = np.concatenate([X1, grad_g])
             buffer.append(pair)
 
         accum_loss = 0
@@ -73,7 +90,7 @@ def main(args):
             sample_t = random.choices(t, k=batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt, sigma_max, sigma_diff)
+                    sigma, dt, sigma_max, sigma_diff, x_vec_dim)
 
             assert len(Xt) == len(sample_t), \
                     'len of Xt and t vectors do not match'
@@ -86,10 +103,7 @@ def main(args):
             weight = torch.tensor(weight, dtype=torch.float32)
 
             optimizer.zero_grad()
-
-            Xt = Xt.view(-1, 1)
             features = torch.cat((Xt, sample_t), dim=1)
-
             prediction = model(features)
             diff = prediction - label
             batch_loss = torch.mean(weight * (diff**2))
@@ -102,29 +116,30 @@ def main(args):
     X1_val = []
     # validate drift by comparing distribution of X1 to Boltzmann distribution
     for _ in range(1000):
-        X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs))
+        X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, \
+                x_vec_dim))
 
-    x_th = np.linspace(-5.0, 5.0, 100)
-    mu = np.exp(-0.5 * x_th**2 / tau)
+    X1_val = np.array(X1_val, dtype=np.float32)
+    X1_x_slice = X1_val[:, 0]
+    X1_y_slice = X1_val[:, 1]
 
-    # normalize Boltzmann distribution
-    mu /= np.trapezoid(mu, x_th)
+    if args.energy_type == 'gmm':
+        plot_theoretical_distribution('gmm', tau, X1_x_slice, mu1, mu2, \
+                cov1, cov2, w1, w2)
+    else:
+        plot_theoretical_distribution('well', tau, X1_x_slice, None, None, \
+                None, None, None, None)
 
-    mean_th = np.trapezoid(mu * x_th, x_th)
-    var_th = np.trapezoid(mu * (x_th - mean_th)**2, x_th)
-
-    print('Mean: {}, std: {} of ML-predicted Boltzmann distribution'.format( \
-            np.mean(X1_val), np.std(X1_val)))
-    print('Mean: {}, std: {} of theoretical Boltzmann distribution'.format( \
-            mean_th, np.sqrt(var_th)))
-
-    plt.hist(X1_val, bins=100, density=True, label=r'ML $\mu$')
-    plt.plot(x_th, mu, label='Theoretical')
-    plt.title('Validate Boltzmann distribution')
+    plt.figure(figsize=(8, 6))
+    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-5, 5], [-5, 5]], \
+            density=True)
+    plt.colorbar(label=r'$\mu(x)$')
+    plt.title(f'2D Boltzmann distribution from ML samples ({args.energy_type})')
     plt.xlabel('x')
-    plt.ylabel(r'$\mu(x)$')
-    plt.legend()
-    plt.savefig('boltz_adjoint.png')
+    plt.ylabel('y')
+    plt.tight_layout()
+    plt.savefig(f'boltz_2d_ml_{args.energy_type}.png')
+    plt.close()
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
@@ -134,32 +149,60 @@ def load_model(input_dim, hidden_dim, output_dim, lr):
     return model, optimizer
 
 
-def euler_maruyama(t, model, num_t, dt, sigma, freqs):
+def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim):
     # Gaussian noise term for infinitesimal step of Brownian motion
-    dB = np.random.normal(0, np.sqrt(dt), size=num_t) 
+    dB = np.random.normal(0, np.sqrt(dt), size=(num_t, x_vec_dim))
 
     # Dirac distribution at t = 0
-    x = np.zeros(num_t)
+    x = np.zeros((num_t, x_vec_dim))
 
     t_fourier = fourier(t, freqs)
 
     # Euler-Maruyama with no gradient
     # https://ipython-books.github.io/134-simulating-a-stochastic-differential-equation/
     for i in range(num_t - 1):
-        x_i_tensor = torch.tensor(x[i], dtype=torch.float32).unsqueeze(0)
+        x_i_tensor = torch.tensor(x[i], dtype=torch.float32)
         t_i_tensor = torch.tensor(t_fourier[i], dtype=torch.float32)
 
         features = torch.cat((x_i_tensor, t_i_tensor), dim=0)
 
         with torch.no_grad():
-            u_theta = model(features).item()
+            u_theta = model(features).numpy()
 
         x[i+1] = x[i] + (u_theta * dt) + (sigma(t[i]) * dB[i])
 
-    return float(x[-1])
+    return x[-1]
 
 
-def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff):
+def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim):
+    inv_cov1 = np.linalg.inv(cov1)
+    inv_cov2 = np.linalg.inv(cov2)
+
+    p1 = multivariate_normal.pdf(x, mean=mu1, cov=cov1)
+    p2 = multivariate_normal.pdf(x, mean=mu2, cov=cov2)
+
+    p = w1 * p1 + w2 * p2
+
+    grad_p1 = -p1 * (inv_cov1 @ (x - mu1))
+    grad_p2 = -p2 * (inv_cov2 @ (x - mu2))
+
+    grad_p = w1 * grad_p1 + w2 * grad_p2
+
+    grad_E = -tau * grad_p / p
+
+    # base distribution is multivariate normal probability density function
+    # with mean 0, since there is no drift in base process
+    mu_base = np.zeros(x_vec_dim)
+    cov_base = var * np.eye(x_vec_dim)
+    inv_cov_base = np.linalg.inv(cov_base)
+
+    grad_log_p_base = -inv_cov_base @ (x - mu_base)
+
+    return grad_log_p_base + grad_E
+
+
+def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
+                        sigma_diff, x_vec_dim):
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
     # mean X1 and var 0
@@ -173,21 +216,27 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, sigma_dif
     weight = []
 
     for i in range(len(sample_t)):
-        X1 = sample_buffer[i][0]
-        grad_g = sample_buffer[i][1]
+        X1 = sample_buffer[i][:x_vec_dim]
+        grad_g = sample_buffer[i][x_vec_dim:]
+        t_i = sample_t[i]
+        var = var_Xt(t_i)
+        sigma_i = sigma(t_i)
 
-        if var_Xt(sample_t[i]) < 0:
-            raise ValueError('Negative variance {} at t = {}'.format(var_Xt(sample_t[i]), \
-                    sample_t[i]))
+        if np.any(var < 0):
+            raise ValueError('Negative var {} at t = {}'.format(var, t_i))
 
-        Xt.append(np.random.normal(mean_Xt(sample_t[i], X1), \
-                np.sqrt(np.maximum(var_Xt(sample_t[i]), np.float32(0.0)))))
+        Xt.append(np.random.normal(mean_Xt(t_i, X1), \
+                np.sqrt(np.maximum(var, np.float32(0.0)))))
 
-        label.append(-sigma(sample_t[i]) * grad_g)
+        label.append(-sigma_i * grad_g)
 
         # weight to improve numerical stability
-        weight.append(0.5 / sigma(sample_t[i])**2)
+        weight.append(np.full(x_vec_dim, 0.5 / sigma_i**2))
       
+    Xt = np.array(Xt, dtype=np.float32)
+    label = np.array(label, dtype=np.float32)
+    weight = np.array(weight, dtype=np.float32)
+
     return Xt, label, weight
 
 
@@ -205,11 +254,71 @@ def fourier(t, freqs):
     return np.array(t_fourier)
 
 
+def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
+        cov1, cov2, w1, w2):
+    npoints = 500
+
+    x = np.linspace(-5.0, 5.0, npoints)
+    y = np.linspace(-5.0, 5.0, npoints)
+    X, Y = np.meshgrid(x, y)
+
+    if energy_type == 'gmm':
+        XY = np.column_stack([X.ravel(), Y.ravel()])
+
+        p1 = multivariate_normal.pdf(XY, mean=mu1, cov=cov1)
+        p2 = multivariate_normal.pdf(XY, mean=mu2, cov=cov2)
+        p = w1 * p1 + w2 * p2
+
+        boltz = p.reshape(npoints, npoints)
+    else:
+        E = 0.5 * (X**2 + Y**2)
+        boltz = np.exp(-E / tau)
+
+    # normalize Boltzmann distribution
+    boltz /= np.trapezoid(np.trapezoid(boltz, x, axis=1), y, axis=0)
+
+    plt.figure(figsize=(8, 6))
+    plt.contourf(X, Y, boltz, levels=50)
+    plt.colorbar(label=r'$\mu(x)$')
+    plt.title(f'2D Boltzmann distribution ({energy_type})')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.tight_layout()
+    plt.savefig(f'boltz_2d_{energy_type}.png')
+    plt.close()
+
+    y0_ind = np.argmin(np.abs(y - 0))
+    boltz_slice = boltz[y0_ind, :]
+
+    boltz_slice /= np.trapezoid(boltz_slice, x)
+
+    plt.hist(X1_x_slice, bins=100, density=True, label=r'ML-predicted')
+    plt.plot(x, boltz_slice, label='Theoretical')
+    plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
+    plt.xlabel('x')
+    plt.ylabel(r'$\mu(x, y=0)$')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'boltz_{energy_type}_slice.png')
+    plt.close()
+
+    if energy_type == 'well':
+        mean = np.trapezoid(boltz_slice * x, x)
+        var = np.trapezoid(boltz_slice * (x - mean)**2, x)
+
+        print('Mean: {}, std: {} of ML-predicted distribution'.format( \
+                np.mean(X1_x_slice), np.std(X1_x_slice)))
+        print('Mean: {}, std: {} of theoretical distribution'.format( \
+                mean, np.sqrt(var)))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hidden_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--energy_type', type=str, default='well', \
+            choices=['well', 'gmm'])
 
     args = parser.parse_args()
 

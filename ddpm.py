@@ -72,6 +72,7 @@ def main(args):
     plt.hist(x0_val, bins=500, density=True, label=r'ML $\mu$')
     plt.hist(x_calc, bins=500, density=True, label=r'Calculated')
     plt.plot(x_th, mu, label='Theoretical')
+    plt.title('1D Boltzmann distribution')
     plt.xlabel('x')
     plt.ylabel(r'$\mu(x)$')
     plt.legend()
