@@ -45,7 +45,7 @@ def main(args):
     else:
         sigma_max = 1.0
 
-    # use var-exploding schedule
+    # geometric noise schedule
     sigma_min = 0.05
     sigma_diff = sigma_max / sigma_min
     sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
@@ -287,9 +287,8 @@ def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
     plt.savefig(f'boltz_2d_{energy_type}.png')
     plt.close()
 
-    y0_ind = np.argmin(np.abs(y - 0))
-    boltz_slice = boltz[y0_ind, :]
-
+    # turn p(x, y) into p(x)
+    boltz_slice = np.trapezoid(boltz, y, axis=0)
     boltz_slice /= np.trapezoid(boltz_slice, x)
 
     plt.hist(X1_x_slice, bins=100, density=True, label=r'ML-predicted')
@@ -302,14 +301,13 @@ def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
     plt.savefig(f'boltz_{energy_type}_slice.png')
     plt.close()
 
-    if energy_type == 'well':
-        mean = np.trapezoid(boltz_slice * x, x)
-        var = np.trapezoid(boltz_slice * (x - mean)**2, x)
+    mean = np.trapezoid(boltz_slice * x, x)
+    var = np.trapezoid(boltz_slice * (x - mean)**2, x)
 
-        print('Mean: {}, std: {} of ML-predicted distribution'.format( \
-                np.mean(X1_x_slice), np.std(X1_x_slice)))
-        print('Mean: {}, std: {} of theoretical distribution'.format( \
-                mean, np.sqrt(var)))
+    print('Mean: {}, std: {} of ML-predicted distribution'.format( \
+            np.mean(X1_x_slice), np.std(X1_x_slice)))
+    print('Mean: {}, std: {} of theoretical distribution'.format( \
+            mean, np.sqrt(var)))
 
 
 if __name__ == '__main__':
