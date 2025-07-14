@@ -42,6 +42,22 @@ def main(args):
         w1, w2 = 0.5, 0.5
 
         sigma_max = 1.5
+
+        # whitening
+        mean_gmm, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
+
+        mu1_white = W @ (mu1 - mean_gmm)
+        mu2_white = W @ (mu2 - mean_gmm)
+        cov1_white = W @ cov1 @ W.T
+        cov2_white = W @ cov2 @ W.T
+        '''
+        mean_gmm, std_gmm = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
+
+        mu1 = (mu1 - mean_gmm) / std_gmm
+        mu2 = (mu2 - mean_gmm) / std_gmm
+        cov1 = cov1 / (std_gmm[:, None] * std_gmm[None, :])
+        cov2 = cov2 / (std_gmm[:, None] * std_gmm[None, :])
+        '''
     else:
         sigma_max = 1.0
 
@@ -66,22 +82,23 @@ def main(args):
             output_size, args.lr)
 
     for j in range(args.epochs):
-        X1_list = []
-        grad_g_list = []
         for _ in range(n_paths):
             X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim)
+        #    X1_norm = (X1 - mean_gmm) / std_gmm
+            X1_norm = W @ (X1 - mean_gmm)
 
             # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
             # cumulative var of full path
             var = np.sum(sigma(t)**2 * dt)
 
             if args.energy_type == 'gmm':
-                grad_g = calculate_grad_g(X1, mu1, mu2, cov1, cov2, w1, w2, \
-                        tau, var, x_vec_dim)
+                grad_g = calculate_grad_g(X1_norm, mu1_white, mu2_white, \
+                        cov1_white, cov2_white, w1, w2, tau, var, x_vec_dim, \
+                        mean_gmm, W)
             else:
                 grad_g = (-X1 / var) + (X1 / tau)
 
-            pair = np.concatenate([X1, grad_g])
+            pair = np.concatenate([X1_norm, grad_g])
             buffer.append(pair)
 
         accum_loss = 0
@@ -98,6 +115,7 @@ def main(args):
             sample_t = fourier(sample_t, freqs)
 
             Xt = torch.tensor(Xt, dtype=torch.float32)
+#            Xt = Xt - Xt.mean(dim=0, keepdim=True)
             sample_t = torch.tensor(sample_t, dtype=torch.float32)
             label = torch.tensor(label, dtype=torch.float32)
             weight = torch.tensor(weight, dtype=torch.float32)
@@ -120,6 +138,27 @@ def main(args):
                 x_vec_dim))
 
     X1_val = np.array(X1_val, dtype=np.float32)
+
+    print("mean and std")
+    print(np.mean(X1_val[:,0]), np.std(X1_val[:,0]))
+    print(np.mean(X1_val[:,1]), np.std(X1_val[:,1]))
+
+    plt.figure(figsize=(8, 6))
+    plt.hist2d(X1_val[:,0], X1_val[:,1], bins=50, range=[[-5, 5], [-5, 5]], \
+            density=True)
+    plt.colorbar(label=r'$\mu(x)$')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.tight_layout()
+    plt.savefig(f'after_training.png')
+    plt.close()
+
+    if args.energy_type == 'gmm':
+        W_inv = np.linalg.inv(W)
+        X1_val = (W_inv @ X1_val.T).T + mean_gmm
+#    X1_val = (X1_val + mean_gmm) * std_gmm
+#    X1_val = (X1_val - mean_gmm) / std_gmm
+
     X1_x_slice = X1_val[:, 0]
     X1_y_slice = X1_val[:, 1]
 
@@ -174,7 +213,11 @@ def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim):
     return x[-1]
 
 
-def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim):
+def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim, \
+        mean_gmm, W):
+#    x = W @ (x - mean_gmm)
+#    x = (x - mean_gmm) / std_gmm
+
     inv_cov1 = np.linalg.inv(cov1)
     inv_cov2 = np.linalg.inv(cov2)
 
@@ -201,8 +244,29 @@ def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim):
     return grad_log_p_base + grad_E
 
 
+def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
+    mean_gmm = w1 * mu1 + w2 * mu2
+
+    # derived from law of total variance
+    #cov_gmm = w1 * (cov1 + (mu1 - mean_gmm) * (mu1 - mean_gmm).T) + \
+     #       w2 * (cov2 + (mu2 - mean_gmm) * (mu2 - mean_gmm).T)
+    cov_gmm = w1 * (cov1 + np.outer(mu1 - mean_gmm, mu1 - mean_gmm)) + \
+            w2 * (cov2 + np.outer(mu2 - mean_gmm, mu2 - mean_gmm))
+
+#    std_gmm = np.sqrt(np.diag(cov_gmm))
+
+    inv_cov_gmm = np.linalg.inv(cov_gmm)
+
+    D, Q = np.linalg.eigh(inv_cov_gmm)
+    D_sqrt = np.diag(np.sqrt(D))
+    W = D_sqrt @ Q.T
+
+    return mean_gmm, W
+#    return mean_gmm, std_gmm
+
+
 def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
-                        sigma_diff, x_vec_dim):
+        sigma_diff, x_vec_dim):
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
     # mean X1 and var 0
@@ -277,7 +341,7 @@ def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
     # normalize Boltzmann distribution
     boltz /= np.trapezoid(np.trapezoid(boltz, x, axis=1), y, axis=0)
 
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(10, 8))
     plt.contourf(X, Y, boltz, levels=50)
     plt.colorbar(label=r'$\mu(x)$')
     plt.title(f'2D Boltzmann distribution ({energy_type})')
