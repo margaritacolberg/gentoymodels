@@ -26,38 +26,35 @@ def main(args):
     tau = 1
     buffer = []
 
-    batch_size = 64
+    batch_size = 256
     n_paths = 100
     n_inner_loop = 10
 
     if args.energy_type == 'gmm':
         # Gaussian mixture model parameters
-        mu1 = np.array([2.0, 2.0])
-        cov1 = np.array([[2.0, 0.0], [0.0, 3.0]])
+        #mu1 = np.array([2.0, 2.0])
+        #cov1 = np.array([[2.0, 0.0], [0.0, 3.0]])
 
-        mu2 = np.array([-2.0, -2.0])
-        cov2 = np.array([[1.0, 0.0], [0.0, 2.0]])
+        mu1 = np.array([-4.0, -4.0])
+        cov1 = np.array([[1.0, 0.0], [0.0, 2.0]])
+
+#        mu2 = np.array([-4.0, -4.0])
+#        cov2 = np.array([[1.0, 0.0], [0.0, 2.0]])
 
         # weights
-        w1, w2 = 0.5, 0.5
+#        w1, w2 = 0.5, 0.5
+        w1 = 1.0
 
         sigma_max = 1.5
 
         # whitening
-        mean_gmm, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
+        #mean_gmm, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
+        mean_gmm, W = mean_std_for_norm(mu1, cov1, w1)
 
         mu1_white = W @ (mu1 - mean_gmm)
-        mu2_white = W @ (mu2 - mean_gmm)
+#        mu2_white = W @ (mu2 - mean_gmm)
         cov1_white = W @ cov1 @ W.T
-        cov2_white = W @ cov2 @ W.T
-        '''
-        mean_gmm, std_gmm = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
-
-        mu1 = (mu1 - mean_gmm) / std_gmm
-        mu2 = (mu2 - mean_gmm) / std_gmm
-        cov1 = cov1 / (std_gmm[:, None] * std_gmm[None, :])
-        cov2 = cov2 / (std_gmm[:, None] * std_gmm[None, :])
-        '''
+#        cov2_white = W @ cov2 @ W.T
     else:
         sigma_max = 1.0
 
@@ -84,21 +81,22 @@ def main(args):
     for j in range(args.epochs):
         for _ in range(n_paths):
             X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim)
-        #    X1_norm = (X1 - mean_gmm) / std_gmm
-            X1_norm = W @ (X1 - mean_gmm)
 
             # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
             # cumulative var of full path
             var = np.sum(sigma(t)**2 * dt)
 
             if args.energy_type == 'gmm':
-                grad_g = calculate_grad_g(X1_norm, mu1_white, mu2_white, \
-                        cov1_white, cov2_white, w1, w2, tau, var, x_vec_dim, \
+                #grad_g = calculate_grad_g(X1_norm, mu1_white, mu2_white, \
+                 #       cov1_white, cov2_white, w1, w2, tau, var, x_vec_dim, \
+                  #      mean_gmm, W)
+                grad_g = calculate_grad_g(X1, mu1_white, \
+                        cov1_white, w1, tau, var, x_vec_dim, \
                         mean_gmm, W)
             else:
                 grad_g = (-X1 / var) + (X1 / tau)
 
-            pair = np.concatenate([X1_norm, grad_g])
+            pair = np.concatenate([X1, grad_g])
             buffer.append(pair)
 
         accum_loss = 0
@@ -138,39 +136,31 @@ def main(args):
                 x_vec_dim))
 
     X1_val = np.array(X1_val, dtype=np.float32)
+    print("Whitened mean:", np.mean(X1_val, axis=0))
+    print("Whitened cov:", np.cov(X1_val.T))
 
     print("mean and std")
     print(np.mean(X1_val[:,0]), np.std(X1_val[:,0]))
     print(np.mean(X1_val[:,1]), np.std(X1_val[:,1]))
 
-    plt.figure(figsize=(8, 6))
-    plt.hist2d(X1_val[:,0], X1_val[:,1], bins=50, range=[[-5, 5], [-5, 5]], \
-            density=True)
-    plt.colorbar(label=r'$\mu(x)$')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.tight_layout()
-    plt.savefig(f'after_training.png')
-    plt.close()
-
-    if args.energy_type == 'gmm':
-        W_inv = np.linalg.inv(W)
-        X1_val = (W_inv @ X1_val.T).T + mean_gmm
-#    X1_val = (X1_val + mean_gmm) * std_gmm
-#    X1_val = (X1_val - mean_gmm) / std_gmm
+#    if args.energy_type == 'gmm':
+#        W_inv = np.linalg.inv(W)
+#        X1_val = (W_inv @ X1_val.T).T + mean_gmm
 
     X1_x_slice = X1_val[:, 0]
     X1_y_slice = X1_val[:, 1]
 
     if args.energy_type == 'gmm':
-        plot_theoretical_distribution('gmm', tau, X1_x_slice, mu1, mu2, \
-                cov1, cov2, w1, w2)
+        #plot_theoretical_distribution('gmm', tau, X1_x_slice, mu1, mu2, \
+         #       cov1, cov2, w1, w2)
+        plot_theoretical_distribution('gmm', tau, X1_x_slice, mu1, None, \
+                cov1, None, w1, None, W, mean_gmm)
     else:
         plot_theoretical_distribution('well', tau, X1_x_slice, None, None, \
                 None, None, None, None)
 
     plt.figure(figsize=(8, 6))
-    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-5, 5], [-5, 5]], \
+    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]], \
             density=True)
     plt.colorbar(label=r'$\mu(x)$')
     plt.title(f'2D Boltzmann distribution from ML samples ({args.energy_type})')
@@ -213,11 +203,9 @@ def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim):
     return x[-1]
 
 
+'''
 def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim, \
         mean_gmm, W):
-#    x = W @ (x - mean_gmm)
-#    x = (x - mean_gmm) / std_gmm
-
     inv_cov1 = np.linalg.inv(cov1)
     inv_cov2 = np.linalg.inv(cov2)
 
@@ -242,27 +230,72 @@ def calculate_grad_g(x, mu1, mu2, cov1, cov2, w1, w2, tau, var, x_vec_dim, \
     grad_log_p_base = -inv_cov_base @ (x - mu_base)
 
     return grad_log_p_base + grad_E
+    '''
 
+def calculate_grad_g(x, mu1, cov1, w1, tau, var, x_vec_dim, \
+        mean_gmm, W):
+    x = W @ (x - mean_gmm)
 
+    inv_cov1 = np.linalg.inv(cov1)
+
+    p1 = multivariate_normal.pdf(x, mean=mu1, cov=cov1)
+
+    p = w1 * p1
+
+    grad_p1 = -p1 * (inv_cov1 @ (x - mu1))
+
+    grad_p = w1 * grad_p1
+
+    grad_E = -tau * grad_p / p
+
+    grad_E = W.T @ grad_E
+
+    # base distribution is multivariate normal probability density function
+    # with mean 0, since there is no drift in base process
+    mu_base = np.zeros(x_vec_dim)
+    cov_base = var * np.eye(x_vec_dim)
+    inv_cov_base = np.linalg.inv(cov_base)
+
+    grad_log_p_base = -inv_cov_base @ (x - mu_base)
+
+    return grad_log_p_base + grad_E
+
+'''
 def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
     mean_gmm = w1 * mu1 + w2 * mu2
 
     # derived from law of total variance
-    #cov_gmm = w1 * (cov1 + (mu1 - mean_gmm) * (mu1 - mean_gmm).T) + \
-     #       w2 * (cov2 + (mu2 - mean_gmm) * (mu2 - mean_gmm).T)
     cov_gmm = w1 * (cov1 + np.outer(mu1 - mean_gmm, mu1 - mean_gmm)) + \
             w2 * (cov2 + np.outer(mu2 - mean_gmm, mu2 - mean_gmm))
 
-#    std_gmm = np.sqrt(np.diag(cov_gmm))
+#    inv_cov_gmm = np.linalg.inv(cov_gmm)
+
+#    D, Q = np.linalg.svd(inv_cov_gmm)
+#    D_sqrt = np.diag(np.sqrt(D + 1e-5))
+#    W = D_sqrt @ Q.T
+
+#    U, Lambda, _ = np.linalg.svd(cov_gmm)
+#    W = np.dot(U, np.dot(np.diag(1.0 / np.sqrt(Lambda + 1e-5)), U.T))
+
+    return mean_gmm, W
+    '''
+
+def mean_std_for_norm(mu1, cov1, w1):
+    mean_gmm = w1 * mu1
+
+    # derived from law of total variance
+    cov_gmm = w1 * (cov1 + np.outer(mu1 - mean_gmm, mu1 - mean_gmm))
 
     inv_cov_gmm = np.linalg.inv(cov_gmm)
 
     D, Q = np.linalg.eigh(inv_cov_gmm)
-    D_sqrt = np.diag(np.sqrt(D))
+    D_sqrt = np.diag(np.sqrt(D + 1e-5))
     W = D_sqrt @ Q.T
 
+#    U, Lambda, _ = np.linalg.svd(cov_gmm)
+#    W = np.dot(U, np.dot(np.diag(1.0 / np.sqrt(Lambda + 1e-5)), U.T))
+
     return mean_gmm, W
-#    return mean_gmm, std_gmm
 
 
 def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
@@ -319,19 +352,23 @@ def fourier(t, freqs):
 
 
 def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
-        cov1, cov2, w1, w2):
-    npoints = 500
+        cov1, cov2, w1, w2, W, mean_gmm):
+    npoints = 800
 
-    x = np.linspace(-5.0, 5.0, npoints)
-    y = np.linspace(-5.0, 5.0, npoints)
+    x = np.linspace(-10.0, 10.0, npoints)
+    y = np.linspace(-10.0, 10.0, npoints)
     X, Y = np.meshgrid(x, y)
 
     if energy_type == 'gmm':
         XY = np.column_stack([X.ravel(), Y.ravel()])
+        XY_white = (W @ (XY.T - mean_gmm[:, None])).T
+        mu1_white = W @ (mu1 - mean_gmm)
+        cov1_white = W @ cov1 @ W.T
 
-        p1 = multivariate_normal.pdf(XY, mean=mu1, cov=cov1)
-        p2 = multivariate_normal.pdf(XY, mean=mu2, cov=cov2)
-        p = w1 * p1 + w2 * p2
+        p1 = multivariate_normal.pdf(XY_white, mean=mu1_white, cov=cov1_white)
+    #    p2 = multivariate_normal.pdf(XY, mean=mu2, cov=cov2)
+    #    p = w1 * p1 + w2 * p2
+        p = w1 * p1
 
         boltz = p.reshape(npoints, npoints)
     else:
@@ -355,8 +392,10 @@ def plot_theoretical_distribution(energy_type, tau, X1_x_slice, mu1, mu2, \
     boltz_slice = np.trapezoid(boltz, y, axis=0)
     boltz_slice /= np.trapezoid(boltz_slice, x)
 
+    x_white = (W @ (x.T - mean_gmm[:, None])).T
+
     plt.hist(X1_x_slice, bins=100, density=True, label=r'ML-predicted')
-    plt.plot(x, boltz_slice, label='Theoretical')
+    plt.plot(x_white, boltz_slice, label='Theoretical')
     plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
     plt.xlabel('x')
     plt.ylabel(r'$\mu(x, y=0)$')
