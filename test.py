@@ -1,23 +1,26 @@
 import numpy as np
 
 from adjoint import *
+from systems import *
 
 def main():
     mu1 = np.array([2.0, 2.0])
-    cov1 = np.array([[2.0, 0.0], [0.0, 3.0]])
-    mu2 = np.array([-4.0, -4.0])
-    cov2 = np.array([[1.0, 0.0], [0.0, 2.0]])
+    cov1 = np.array([[1.0, 0.0], [0.0, 1.0]])
+    mu2 = np.array([-2.0, -2.0])
+    cov2 = np.array([[1.0, 0.0], [0.0, 1.0]])
 
     w1, w2 = 0.5, 0.5
 
     m, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
 
-    mu1_white = W @ (mu1 - m)
-    cov1_white = W @ cov1 @ W.T
-    mu2_white = W @ (mu2 - m)
-    cov2_white = W @ cov2 @ W.T
-
     tau = 1.0
+
+    gmm = GMMSystem(mus=[mu1, mu2], covs=[cov1, cov2], \
+            log_w=np.log(np.array([w1, w2])))
+
+    affine = AffineSystem(gmm, W=W, m=m)
+
+    system = TemperatureSystem(affine, t=tau)
 
     points = [
         np.array([-1.0, -0.5]),       # between the modes
@@ -28,63 +31,33 @@ def main():
     ]
 
     npoints = len(points)
-    for i in range(npoints):
-        E1 = calculate_whitened_E(points[i], mu1_white, mu2_white, \
-                cov1_white, cov2_white, w1, w2, tau, W, m)
-        y = W @ (points[i] - m)
-        E2 = calculate_whitened_E_v2(y, W, m, mu1, mu2, cov1, cov2, w1, w2, \
-                tau)
-        assert np.allclose(E1, E2, atol=1e-6)
-
     grad_E = np.zeros((npoints, 2))
     grad_fd = np.zeros((npoints, 2))
     w_grad_E = np.zeros((npoints, 2))
     w_grad_fd = np.zeros((npoints, 2))
     for i in range(npoints):
-        grad_E[i] = calculate_grad_E(points[i], mu1, mu2, cov1, cov2, w1, w2, \
-                tau)
+        grad_E[i] = gmm.gradenergy(points[i])
+        grad_fd[i] = finite_difference(lambda x: gmm.energy(x), points[i])
 
-        grad_fd[i] = finite_difference(
-            lambda x: calculate_E(x, mu1, mu2, cov1, cov2, w1, w2, tau),
-            points[i]
-        )
+        assert np.allclose(grad_E[i], grad_fd[i], atol=1e-6)
 
-        w_grad_E[i] = calculate_whitened_grad_E(points[i], mu1_white, \
-                mu2_white, cov1_white, cov2_white, w1, w2, tau, W, m)
+        y = W @ (points[i] - m)
+        E1 = affine.energy(y)
+        E2 = gmm.energy(points[i])
 
-        w_grad_fd[i] = finite_difference(
-            lambda y: calculate_whitened_E(y, mu1_white, mu2_white, \
-                    cov1_white, cov2_white, w1, w2, tau, W, m),
-            points[i]
-        )
+        assert np.allclose(E1, E2, atol=1e-6)
 
-        assert np.allclose(grad_E[i], w_grad_E[i], atol=1e-6)
-        assert np.allclose(grad_fd[i], w_grad_fd[i], atol=1e-6)
+        w_grad_E[i] = affine.gradenergy(y)
+        w_grad_fd[i] = finite_difference(lambda x: affine.energy(x), y)
 
+        assert np.allclose(w_grad_E[i], w_grad_fd[i], atol=1e-6)
 
-def calculate_E(x, mu1, mu2, cov1, cov2, w1, w2, tau):
-    p1 = multivariate_normal.pdf(x, mean=mu1, cov=cov1)
-    p2 = multivariate_normal.pdf(x, mean=mu2, cov=cov2)
+    x, y, boltz = plot_theoretical_contour('gmm', tau, gmm)
+    mean, std = plot_1D_slice('gmm', x, y, boltz)
+    mean_slice, std_slice = marginal_params(mu1, mu2, cov1, cov2, w1, w2)
 
-    p = w1 * p1 + w2 * p2
-
-    return -tau * np.log(p)
-
-
-def calculate_whitened_E(x, mu1, mu2, cov1, cov2, w1, w2, tau, W, m):
-    y = W @ (x - m)
-    return calculate_E(y, mu1, mu2, cov1, cov2, w1, w2, tau)
-
-
-def calculate_whitened_E_v2(y, W, m, mu1, mu2, cov1, cov2, w1, w2, tau):
-    y = np.linalg.solve(W, y) + m
-    p1 = multivariate_normal.pdf(y, mean=mu1, cov=cov1)
-    p2 = multivariate_normal.pdf(y, mean=mu2, cov=cov2)
-
-    p = w1 * p1 + w2 * p2
-    _, logabsdet = np.linalg.slogdet(W)
-
-    return -tau * (np.log(p) - logabsdet)
+    assert np.allclose(mean, mean_slice, atol=1e-6)
+    assert np.allclose(std, std_slice, atol=1e-6)
 
 
 def finite_difference(f, x, eps=1e-6):
@@ -99,6 +72,45 @@ def finite_difference(f, x, eps=1e-6):
         grad_fd[i] = (f(x_plus) - f(x_minus)) / (2 * eps)
 
     return grad_fd
+
+
+def plot_1D_slice(energy_type, x, y, boltz):
+    # turn p(x, y) into p(x)
+    boltz_slice = np.trapezoid(boltz, y, axis=0)
+    boltz_slice /= np.trapezoid(boltz_slice, x)
+
+    plt.plot(x, boltz_slice, label='Theoretical')
+    plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
+    plt.xlabel('x')
+    plt.ylabel(r'$\mu(x, y=0)$')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'boltz_{energy_type}_slice.png')
+    plt.close()
+
+    mean = np.trapezoid(boltz_slice * x, x)
+    var = np.trapezoid(boltz_slice * (x - mean)**2, x)
+
+    return mean, np.sqrt(var)
+
+
+def marginal_params(mu1, mu2, cov1, cov2, w1, w2):
+    dim = 0
+
+    weights = [w1, w2]
+    mus = [mu1, mu2]
+    covs = [cov1, cov2]
+
+    mean_slice = sum(w * mu[dim] for w, mu in zip(weights, mus))
+
+    var_slice = sum(
+        w * (cov[dim, dim] + (mu[dim] - mean_slice)**2)
+        for w, mu, cov in zip(weights, mus, covs)
+    )
+
+    std_slice = np.sqrt(var_slice)
+
+    return mean_slice, std_slice
 
 
 if __name__ == "__main__":
