@@ -5,7 +5,7 @@
 # using the adjoint matching algorithm
 
 import argparse
-import math
+import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import random
@@ -27,8 +27,7 @@ def main(args):
     tau = 1
     buffer = []
 
-    batch_size = 128
-    n_paths = 100
+    batch_size = 256
     n_inner_loop = 10
 
     if args.energy_type == 'gmm':
@@ -76,7 +75,7 @@ def main(args):
             output_size, args.lr)
 
     for j in range(args.epochs):
-        for _ in range(n_paths):
+        for _ in range(args.n_paths):
             X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim)
 
             # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
@@ -106,6 +105,7 @@ def main(args):
             sample_t = fourier(sample_t, freqs)
 
             Xt = torch.tensor(Xt, dtype=torch.float32)
+            Xt = Xt - Xt.mean(dim=0, keepdim=True)
             sample_t = torch.tensor(sample_t, dtype=torch.float32)
             label = torch.tensor(label, dtype=torch.float32)
             weight = torch.tensor(weight, dtype=torch.float32)
@@ -119,7 +119,7 @@ def main(args):
             batch_loss.backward()
             optimizer.step()
 
-        print('Epoch: {}, train loss: {}'.format(j, accum_loss))
+        print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
     X1_val = []
     # validate drift by comparing distribution of X1 to Boltzmann distribution
@@ -129,21 +129,27 @@ def main(args):
 
     X1_val = np.array(X1_val, dtype=np.float32)
 
-    print('Whitened mean:', np.mean(X1_val, axis=0))
-    print('Whitened cov:', np.cov(X1_val.T))
-
-    X1_unwhitened = np.linalg.solve(W, X1_val.T).T + m
-
-    X1_x_slice = X1_unwhitened[:, 0]
-    X1_y_slice = X1_unwhitened[:, 1]
-
     if args.energy_type == 'gmm':
+        print('whitened mean:', np.mean(X1_val, axis=0))
+        print('whitened cov:', np.cov(X1_val.T))
+
+        X1_unwhitened = np.linalg.solve(W, X1_val.T).T + m
+
+        X1_x_slice = X1_unwhitened[:, 0]
+        X1_y_slice = X1_unwhitened[:, 1]
+
         x_th, y_th, boltz = plot_theoretical_contour(args.energy_type, tau, \
                 gmm)
-        plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
+        ml_mean, ml_std, th_mean, th_std = \
+                plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
     else:
-        plot_theoretical_contour('well', tau, X1_x_slice, None, None, \
-                None, None, None, None)
+        X1_x_slice = X1_val[:, 0]
+        X1_y_slice = X1_val[:, 1]
+
+        x_th, y_th, boltz = plot_theoretical_contour(args.energy_type, tau, \
+                None)
+        ml_mean, ml_std, th_mean, th_std = \
+                plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
 
     plt.figure(figsize=(8, 6))
     plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]], \
@@ -155,6 +161,18 @@ def main(args):
     plt.tight_layout()
     plt.savefig(f'boltz_2d_ml_{args.energy_type}.png')
     plt.close()
+
+    header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs', \
+            'n_paths', 'energy_type', 'ml_mean', 'ml_std', 'th_mean', \
+            'th_std']]
+    output = [[batch_size, n_inner_loop, args.hidden_size, args.lr, \
+            args.epochs, args.n_paths, args.energy_type, ml_mean, ml_std, \
+            th_mean, th_std]]
+
+    with open(args.csv, 'w') as output_csv:
+        writer = csv.writer(output_csv)
+        writer.writerows(header)
+        writer.writerows(output)
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
@@ -237,7 +255,7 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
         sigma_i = sigma(t_i)
 
         if np.any(var < 0):
-            raise ValueError('Negative var {} at t = {}'.format(var, t_i))
+            raise ValueError('negative var {} at t = {}'.format(var, t_i))
 
         Xt.append(np.random.normal(mean_Xt(t_i, X1), \
                 np.sqrt(np.maximum(var, np.float32(0.0)))))
@@ -290,7 +308,7 @@ def plot_theoretical_contour(energy_type, tau, system):
     plt.figure(figsize=(10, 8))
     plt.contourf(x, y, boltz, levels=50)
     plt.colorbar(label=r'$\mu(x)$')
-    plt.title(f'2D Boltzmann distribution ({energy_type})')
+    plt.title(f'2D Boltzmann distribution from theoretical data ({energy_type})')
     plt.xlabel('x')
     plt.ylabel('y')
     plt.tight_layout()
@@ -318,17 +336,16 @@ def plot_1D_slices(energy_type, x, y, boltz, X1_x_slice):
     mean = np.trapezoid(boltz_slice * x, x)
     var = np.trapezoid(boltz_slice * (x - mean)**2, x)
 
-    print('Mean: {}, std: {} of ML-predicted distribution'.format( \
-            np.mean(X1_x_slice), np.std(X1_x_slice)))
-    print('Mean: {}, std: {} of theoretical distribution'.format( \
-            mean, np.sqrt(var)))
+    return np.mean(X1_x_slice), np.std(X1_x_slice), mean, np.sqrt(var)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('csv', help='csv output file')
     parser.add_argument('--hidden_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--n_paths', type=int, default=100)
     parser.add_argument('--energy_type', type=str, default='well', \
             choices=['well', 'gmm'])
 

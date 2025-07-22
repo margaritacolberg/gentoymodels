@@ -15,6 +15,8 @@ def main():
 
     tau = 1.0
 
+    n_paths = 100
+
     gmm = GMMSystem(mus=[mu1, mu2], covs=[cov1, cov2], \
             log_w=np.log(np.array([w1, w2])))
 
@@ -58,6 +60,8 @@ def main():
 
     assert np.allclose(mean, mean_slice, atol=1e-6)
     assert np.allclose(std, std_slice, atol=1e-6)
+
+    plot_euler_maruyama_output(n_paths)
 
 
 def finite_difference(f, x, eps=1e-6):
@@ -111,6 +115,47 @@ def marginal_params(mu1, mu2, cov1, cov2, w1, w2):
     std_slice = np.sqrt(var_slice)
 
     return mean_slice, std_slice
+
+
+def plot_euler_maruyama_output(n_paths):
+    dt = 0.008
+    t_0 = 0.
+    t_1 = 1.
+    num_t = int(t_1 / dt)
+    t = np.linspace(t_0, t_1, num_t)
+
+    # geometric noise schedule
+    sigma_max = 1.5
+    sigma_min = 0.05
+    sigma_diff = sigma_max / sigma_min
+    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
+            * (2 * np.log(sigma_diff))**0.5
+
+    x_vec_dim = 2
+
+    freqs = 3
+
+    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
+
+    X1 = []
+    for _ in range(n_paths):
+        X1.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim))
+
+    X1 = np.array(X1, dtype=np.float32)
+
+    X1_x_slice = X1[:, 0]
+    X1_y_slice = X1[:, 1]
+
+    plt.figure(figsize=(8, 6))
+    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]], \
+            density=True)
+    plt.colorbar(label=r'$\mu(x)$')
+    plt.title(f'Initial distribution of points from Euler-Maruyama paths')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.tight_layout()
+    plt.savefig(f'euler_maruyama.png')
+    plt.close()
 
 
 if __name__ == "__main__":
