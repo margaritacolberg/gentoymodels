@@ -3,6 +3,7 @@ import numpy as np
 from adjoint import *
 from systems import *
 
+
 def main():
     mu1 = np.array([2.0, 2.0])
     cov1 = np.array([[1.0, 0.0], [0.0, 1.0]])
@@ -24,35 +25,38 @@ def main():
 
     system = TemperatureSystem(affine, t=tau)
 
-    points = [
-        np.array([-1.0, -0.5]),       # between the modes
-        np.array([0.0, 0.0]),         # near origin
-        np.array([2.0, 2.0]),         # at mu1
-        np.array([-4.0, -4.0]),       # at mu2
-        np.array([-3.0, -2.0]),       # off-axis
-    ]
+    points = np.array([
+        [-1.0, -0.5],       # between the modes
+        [0.0, 0.0],         # near origin
+        [2.0, 2.0],         # at mu1
+        [-4.0, -4.0],       # at mu2
+        [-3.0, -2.0],       # off-axis
+    ])
 
-    npoints = len(points)
-    grad_E = np.zeros((npoints, 2))
-    grad_fd = np.zeros((npoints, 2))
-    w_grad_E = np.zeros((npoints, 2))
-    w_grad_fd = np.zeros((npoints, 2))
-    for i in range(npoints):
-        grad_E[i] = gmm.gradenergy(points[i])
-        grad_fd[i] = finite_difference(lambda x: gmm.energy(x), points[i])
+    single_point = np.array([
+        [-1.0, -0.5],
+    ])
 
-        assert np.allclose(grad_E[i], grad_fd[i], atol=1e-6)
+    single_E = gmm.gradenergy(single_point)
+    single_fd = finite_difference(gmm.energy, single_point)
 
-        y = W @ (points[i] - m)
-        E1 = affine.energy(y)
-        E2 = gmm.energy(points[i])
+    assert np.allclose(single_E, single_fd, atol=1e-6)
 
-        assert np.allclose(E1, E2, atol=1e-6)
+    grad_E = gmm.gradenergy(points)
+    grad_fd = finite_difference(gmm.energy, points)
 
-        w_grad_E[i] = affine.gradenergy(y)
-        w_grad_fd[i] = finite_difference(lambda x: affine.energy(x), y)
+    assert np.allclose(grad_E, grad_fd, atol=1e-6)
 
-        assert np.allclose(w_grad_E[i], w_grad_fd[i], atol=1e-6)
+    y = (points - m) @ W.T
+    E1 = affine.energy(y)
+    E2 = gmm.energy(points)
+
+    assert np.allclose(E1, E2, atol=1e-6)
+
+    w_grad_E = affine.gradenergy(y)
+    w_grad_fd = finite_difference(affine.energy, y)
+
+    assert np.allclose(w_grad_E, w_grad_fd, atol=1e-6)
 
     x, y, boltz = plot_theoretical_contour('gmm', tau, gmm)
     mean, std = plot_1D_slice('gmm', x, y, boltz)
@@ -62,18 +66,25 @@ def main():
     assert np.allclose(std, std_slice, atol=1e-6)
 
     plot_euler_maruyama_output(n_paths)
+    test_vectorized_euler_and_gradient(n_paths, system)
 
 
 def finite_difference(f, x, eps=1e-6):
     grad_fd = np.zeros_like(x)
+    n_points, dim = x.shape
 
-    # central difference
-    for i in range(len(x)):
-        x_plus = x.copy()
-        x_plus[i] += eps
-        x_minus = x.copy()
-        x_minus[i] -= eps
-        grad_fd[i] = (f(x_plus) - f(x_minus)) / (2 * eps)
+    for n in range(n_points):
+        for i in range(dim):
+            x_plus = x.copy()
+            x_minus = x.copy()
+
+            x_plus[n, i] += eps
+            x_minus[n, i] -= eps
+
+            f_plus = f(x_plus)[n].item()
+            f_minus = f(x_minus)[n].item()
+
+            grad_fd[n, i] = (f_plus - f_minus) / (2 * eps)
 
     return grad_fd
 
@@ -137,11 +148,8 @@ def plot_euler_maruyama_output(n_paths):
 
     model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
 
-    X1 = []
-    for _ in range(n_paths):
-        X1.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim))
-
-    X1 = np.array(X1, dtype=np.float32)
+    X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
+            n_paths, None)
 
     X1_x_slice = X1[:, 0]
     X1_y_slice = X1[:, 1]
@@ -158,5 +166,58 @@ def plot_euler_maruyama_output(n_paths):
     plt.close()
 
 
-if __name__ == "__main__":
+def test_vectorized_euler_and_gradient(n_paths, system):
+    # set seed for reproducibility
+    np.random.seed(42)
+
+    dt = 0.008
+    t_0 = 0.
+    t_1 = 1.
+    num_t = int(t_1 / dt)
+    t = np.linspace(t_0, t_1, num_t)
+
+    sigma_max = 1.5
+    sigma_min = 0.05
+    sigma_diff = sigma_max / sigma_min
+    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
+            * (2 * np.log(sigma_diff))**0.5
+
+    x_vec_dim = 2
+
+    freqs = 3
+
+    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
+
+    # fix the noise across all paths
+    dB_shared = np.random.normal(0, np.sqrt(dt), size=(num_t, n_paths, \
+            x_vec_dim))
+
+    var = np.sum(sigma(t)**2 * dt)
+
+    X1_serial = []
+    grad_g_serial = []
+    for i in range(n_paths):
+        x1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1, \
+                dB=dB_shared[:, i:i+1, :])
+        X1_serial.append(x1)
+
+        w_grad_E_serial = system.gradenergy(x1)
+        grad_g_serial.append(calculate_grad_g(x1, var, x_vec_dim, \
+                w_grad_E_serial))
+
+    X1_serial = np.concatenate(X1_serial, axis=0)
+    grad_g_serial = np.concatenate(grad_g_serial, axis=0)
+
+    X1_vectorized = euler_maruyama(t, model, num_t, dt, sigma, freqs, \
+            x_vec_dim, n_paths, dB=dB_shared)
+
+    w_grad_E_vectorized = system.gradenergy(X1_vectorized)
+    grad_g_vectorized = calculate_grad_g(X1_vectorized, var, x_vec_dim, \
+            w_grad_E_vectorized)
+
+    assert np.allclose(X1_serial, X1_vectorized, atol=1e-6)
+    assert np.allclose(grad_g_serial, grad_g_vectorized, atol=1e-6)
+
+
+if __name__ == '__main__':
     main()

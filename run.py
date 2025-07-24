@@ -1,7 +1,7 @@
 #SBATCH --account=def-cmaddis
 #SBATCH --time=0-02:00
-#SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=256M
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=512M
 
 import argparse
 import os

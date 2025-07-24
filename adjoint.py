@@ -8,6 +8,7 @@ import argparse
 import csv
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import random
 import torch
 from scipy.stats import multivariate_normal
@@ -18,6 +19,12 @@ from systems import *
 
 
 def main(args):
+    # set seed for reproducibility
+    seed = 42
+    py_rng = random.Random(seed)
+    np_rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+
     dt = 0.008
     t_0 = 0.
     t_1 = 1.
@@ -25,7 +32,7 @@ def main(args):
     t = np.linspace(t_0, t_1, num_t) 
 
     tau = 1
-    buffer = []
+    buffer = None
 
     batch_size = 256
     n_inner_loop = 10
@@ -60,8 +67,6 @@ def main(args):
     sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
             * (2 * np.log(sigma_diff))**0.5
 
-    u = np.zeros(num_t)
-
     x_vec_dim = 2
 
     # inputs: Xt
@@ -75,29 +80,38 @@ def main(args):
             output_size, args.lr)
 
     for j in range(args.epochs):
-        for _ in range(args.n_paths):
-            X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim)
+        # Gaussian noise term for infinitesimal step of Brownian motion
+        dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, args.n_paths, \
+                x_vec_dim))
 
-            # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
-            # cumulative var of full path
-            var = np.sum(sigma(t)**2 * dt)
+        X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
+                args.n_paths, dB, np_rng)
 
-            if args.energy_type == 'gmm':
-                w_grad_E = system.gradenergy(X1)
-                grad_g = calculate_grad_g(X1, var, x_vec_dim, w_grad_E)
-            else:
-                grad_g = (-X1 / var) + (X1 / tau)
+        # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
+        # cumulative var of full path
+        var = np.sum(sigma(t)**2 * dt)
 
-            pair = np.concatenate([X1, grad_g])
-            buffer.append(pair)
+        if args.energy_type == 'gmm':
+            w_grad_E = system.gradenergy(X1)
+            grad_g = calculate_grad_g(X1, var, x_vec_dim, w_grad_E)
+        else:
+            grad_g = (-X1 / var) + (X1 / tau)
+
+        pairs = np.concatenate([X1, grad_g], axis=1)
+
+        if buffer is None:
+            buffer = pairs
+        else:
+            buffer = np.vstack([buffer, pairs])
 
         accum_loss = 0
         for k in range(n_inner_loop):
-            sample_buffer = random.choices(buffer, k=batch_size)
-            sample_t = random.choices(t, k=batch_size)
+            indices = py_rng.choices(range(len(buffer)), k=batch_size)
+            sample_buffer = np.array([buffer[i] for i in indices])
+            sample_t = py_rng.choices(t, k=batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt, sigma_max, sigma_diff, x_vec_dim)
+                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, np_rng)
 
             assert len(Xt) == len(sample_t), \
                     'len of Xt and t vectors do not match'
@@ -121,13 +135,16 @@ def main(args):
 
         print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
-    X1_val = []
+    #X1_val = []
     # validate drift by comparing distribution of X1 to Boltzmann distribution
-    for _ in range(1000):
-        X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, \
-                x_vec_dim))
+    #for _ in range(1000):
+     #   X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, \
+      #          x_vec_dim, 1, None, np_rng).flatten())
 
-    X1_val = np.array(X1_val, dtype=np.float32)
+    #X1_val = np.array(X1_val, dtype=np.float32)
+    X1_val = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1000, \
+        None, np_rng)
+
 
     if args.energy_type == 'gmm':
         print('whitened mean:', np.mean(X1_val, axis=0))
@@ -182,22 +199,24 @@ def load_model(input_dim, hidden_dim, output_dim, lr):
     return model, optimizer
 
 
-def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim):
-    # Gaussian noise term for infinitesimal step of Brownian motion
-    dB = np.random.normal(0, np.sqrt(dt), size=(num_t, x_vec_dim))
+def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, \
+        dB, np_rng):
+    if dB is None:
+        dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, n_paths, x_vec_dim))
 
     # Dirac distribution at t = 0
-    x = np.zeros((num_t, x_vec_dim))
+    x = np.zeros((num_t, n_paths, x_vec_dim))
 
     t_fourier = fourier(t, freqs)
+    t_fourier = torch.tensor(t_fourier, dtype=torch.float32)
 
     # Euler-Maruyama with no gradient
     # https://ipython-books.github.io/134-simulating-a-stochastic-differential-equation/
     for i in range(num_t - 1):
-        x_i_tensor = torch.tensor(x[i], dtype=torch.float32)
-        t_i_tensor = torch.tensor(t_fourier[i], dtype=torch.float32)
+        x_i = torch.tensor(x[i], dtype=torch.float32)
+        t_i = t_fourier[i].repeat(n_paths, 1)
 
-        features = torch.cat((x_i_tensor, t_i_tensor), dim=0)
+        features = torch.cat([x_i, t_i], dim=1)
 
         with torch.no_grad():
             u_theta = model(features).numpy()
@@ -211,8 +230,7 @@ def calculate_grad_g(x, var, x_vec_dim, grad_E):
     # base distribution is multivariate normal probability density function
     # with mean 0, since there is no drift in base process
     mu_base = np.zeros(x_vec_dim)
-    cov_base = var * np.eye(x_vec_dim)
-    grad_log_p_base = -np.linalg.solve(cov_base, x - mu_base)
+    grad_log_p_base = -(x - mu_base) / var
 
     return grad_log_p_base + grad_E
 
@@ -234,7 +252,7 @@ def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
 
 
 def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
-        sigma_diff, x_vec_dim):
+        sigma_diff, x_vec_dim, np_rng):
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
     # mean X1 and var 0
@@ -257,7 +275,7 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
         if np.any(var < 0):
             raise ValueError('negative var {} at t = {}'.format(var, t_i))
 
-        Xt.append(np.random.normal(mean_Xt(t_i, X1), \
+        Xt.append(np_rng.normal(mean_Xt(t_i, X1), \
                 np.sqrt(np.maximum(var, np.float32(0.0)))))
 
         label.append(-sigma_i * grad_g)
