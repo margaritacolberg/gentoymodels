@@ -135,16 +135,9 @@ def main(args):
 
         print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
-    #X1_val = []
     # validate drift by comparing distribution of X1 to Boltzmann distribution
-    #for _ in range(1000):
-     #   X1_val.append(euler_maruyama(t, model, num_t, dt, sigma, freqs, \
-      #          x_vec_dim, 1, None, np_rng).flatten())
-
-    #X1_val = np.array(X1_val, dtype=np.float32)
     X1_val = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1000, \
         None, np_rng)
-
 
     if args.energy_type == 'gmm':
         print('whitened mean:', np.mean(X1_val, axis=0))
