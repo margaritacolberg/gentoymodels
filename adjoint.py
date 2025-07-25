@@ -111,7 +111,8 @@ def main(args):
             sample_t = py_rng.choices(t, k=batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, np_rng)
+                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, batch_size, \
+                    np_rng)
 
             assert len(Xt) == len(sample_t), \
                     'len of Xt and t vectors do not match'
@@ -136,8 +137,8 @@ def main(args):
         print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
-    X1_val = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1000, \
-        None, np_rng)
+    X1_val = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
+            1000, None, np_rng)
 
     if args.energy_type == 'gmm':
         print('whitened mean:', np.mean(X1_val, axis=0))
@@ -245,40 +246,33 @@ def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
 
 
 def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
-        sigma_diff, x_vec_dim, np_rng):
+        sigma_diff, x_vec_dim, batch_size, np_rng):
+    sample_t = np.array(sample_t)
+    assert sample_t.ndim == 1, \
+            'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
+
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
     # mean X1 and var 0
-    c_s = lambda t: sigma_diff**(-2 * t)
+    X1 = sample_buffer[:, :x_vec_dim]
+    grad_g = sample_buffer[:, x_vec_dim:]
+
+    c_s = sigma_diff**(-2 * sample_t)
     c_1 = sigma_diff**(-2)
-    mean_Xt = lambda t, X1: (c_s(t) - 1) / (c_1 - 1) * X1
-    var_Xt = lambda t: sigma_max**2 * (c_s(t) - 1) * (c_s(t) - c_1) / (c_1 - 1)
 
-    Xt = []
-    label = []
-    weight = []
+    mean_Xt = ((c_s - 1) / (c_1 - 1))[:, None] * X1
+    var_Xt = sigma_max**2 * (c_s - 1) * (c_s - c_1) / (c_1 - 1)
 
-    for i in range(len(sample_t)):
-        X1 = sample_buffer[i][:x_vec_dim]
-        grad_g = sample_buffer[i][x_vec_dim:]
-        t_i = sample_t[i]
-        var = var_Xt(t_i)
-        sigma_i = sigma(t_i)
+    if np.any(var_Xt < 0):
+        raise ValueError('one or more t values have negative var')
 
-        if np.any(var < 0):
-            raise ValueError('negative var {} at t = {}'.format(var, t_i))
+    std_Xt = np.sqrt(np.maximum(var_Xt, np.float32(0.0)))[:, None]
 
-        Xt.append(np_rng.normal(mean_Xt(t_i, X1), \
-                np.sqrt(np.maximum(var, np.float32(0.0)))))
+    Xt = np_rng.normal(loc=mean_Xt, scale=std_Xt)
 
-        label.append(-sigma_i * grad_g)
-
-        # weight to improve numerical stability
-        weight.append(np.full(x_vec_dim, 0.5 / sigma_i**2))
-      
-    Xt = np.array(Xt, dtype=np.float32)
-    label = np.array(label, dtype=np.float32)
-    weight = np.array(weight, dtype=np.float32)
+    sigmas = sigma(sample_t)[:, None]
+    label = -sigmas * grad_g
+    weight = np.full((batch_size, x_vec_dim), 0.5) / (sigmas ** 2)
 
     return Xt, label, weight
 
@@ -334,7 +328,7 @@ def plot_1D_slices(energy_type, x, y, boltz, X1_x_slice):
     boltz_slice = np.trapezoid(boltz, y, axis=0)
     boltz_slice /= np.trapezoid(boltz_slice, x)
 
-    plt.hist(X1_x_slice, bins=100, density=True, label=r'ML-predicted')
+    plt.hist(X1_x_slice, bins=200, density=True, label=r'ML-predicted')
     plt.plot(x, boltz_slice, label='Theoretical')
     plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
     plt.xlabel('x')
