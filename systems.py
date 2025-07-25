@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.special import logsumexp
 from scipy.stats import multivariate_normal
 
 
@@ -14,12 +15,17 @@ class System:
 		pass
 
 
-class GMMSystem():
+class GMMSystem(System):
 
     def __init__(self, mus, covs, log_w):
-        self.mus = mus
-        self.covs = covs
+        self.mus = np.stack(mus)                  # (K, D)
+        self.covs = np.stack(covs)                # (K, D, D)
+        self.inv_covs = np.linalg.inv(self.covs)  # (K, D, D)
         self.log_w = log_w
+
+        self.max_w = np.max(self.log_w)
+        self.log_norm_weights = self.log_w - self.max_w - \
+                np.log(np.sum(np.exp(self.log_w - self.max_w)))
 
     def energy(self, x):
         log_p_i = np.stack([
@@ -27,15 +33,9 @@ class GMMSystem():
             for (mu, cov) in zip(self.mus, self.covs)
         ], axis=1)
 
-        max_w = np.max(self.log_w)
-        log_norm_weights = self.log_w - max_w - \
-                np.log(np.sum(np.exp(self.log_w - max_w))) 
+        weighted_log_p_i = self.log_norm_weights + log_p_i
 
-        weighted_log_p_i = log_norm_weights + log_p_i
-
-        max_p = np.max(weighted_log_p_i, axis=1, keepdims=True)
-        return -np.log(np.sum(np.exp(weighted_log_p_i - max_p), \
-                axis=1, keepdims=True)) - max_p
+        return -logsumexp(weighted_log_p_i, axis=1, keepdims=True)
 
     def gradenergy(self, x):
         log_p_i = np.stack([
@@ -43,22 +43,15 @@ class GMMSystem():
             for (mu, cov) in zip(self.mus, self.covs)
         ], axis=1)
 
-        max_w = np.max(self.log_w)
-        log_norm_weights = self.log_w - max_w - \
-                np.log(np.sum(np.exp(self.log_w - max_w))) 
-
-        weighted_log_p_i = log_norm_weights + log_p_i
+        weighted_log_p_i = self.log_norm_weights + log_p_i
 
         max_p = np.max(weighted_log_p_i, axis=1, keepdims=True)
         unnorm_q = np.exp(weighted_log_p_i - max_p)
         q_i = unnorm_q / np.sum(unnorm_q, axis=1, keepdims=True)
 
-        mus = np.stack(self.mus)             # (K, D)
-        covs = np.stack(self.covs)           # (K, D, D)
-        inv_covs = np.linalg.inv(covs)       # (K, D, D)
-
-        diff = x[:, None, :] - mus[None, :, :]                    # (N, K, D)
-        grad_log_p_i = -np.einsum('kij,nkj->nki', inv_covs, diff) # (N, K, D)
+        # both diff, grad_log_p_i are of shape (N, K, D)
+        diff = x[:, None, :] - self.mus[None, :, :]
+        grad_log_p_i = -np.einsum('kij,nkj->nki', self.inv_covs, diff)
 
         return -np.sum(q_i[:, :, None] * grad_log_p_i, axis=1)
 

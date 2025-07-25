@@ -5,6 +5,9 @@ from systems import *
 
 
 def main():
+    seed = 22
+    py_rng, np_rng = seed_all(seed)
+
     mu1 = np.array([2.0, 2.0])
     cov1 = np.array([[1.0, 0.0], [0.0, 1.0]])
     mu2 = np.array([-2.0, -2.0])
@@ -65,8 +68,8 @@ def main():
     assert np.allclose(mean, mean_slice, atol=1e-6)
     assert np.allclose(std, std_slice, atol=1e-6)
 
-    plot_euler_maruyama_output(n_paths)
-    test_vectorized_euler_and_gradient(n_paths, system)
+    plot_euler_maruyama_output(n_paths, np_rng)
+    test_vectorized_euler_and_gradient(n_paths, np_rng, system)
 
 
 def finite_difference(f, x, eps=1e-6):
@@ -128,7 +131,7 @@ def marginal_params(mu1, mu2, cov1, cov2, w1, w2):
     return mean_slice, std_slice
 
 
-def plot_euler_maruyama_output(n_paths):
+def plot_euler_maruyama_output(n_paths, np_rng):
     dt = 0.008
     t_0 = 0.
     t_1 = 1.
@@ -149,7 +152,7 @@ def plot_euler_maruyama_output(n_paths):
     model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
 
     X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
-            n_paths, None)
+            n_paths, None, np_rng)
 
     X1_x_slice = X1[:, 0]
     X1_y_slice = X1[:, 1]
@@ -166,7 +169,7 @@ def plot_euler_maruyama_output(n_paths):
     plt.close()
 
 
-def test_vectorized_euler_and_gradient(n_paths, system):
+def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
     # set seed for reproducibility
     np.random.seed(42)
 
@@ -189,8 +192,7 @@ def test_vectorized_euler_and_gradient(n_paths, system):
     model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
 
     # fix the noise across all paths
-    dB_shared = np.random.normal(0, np.sqrt(dt), size=(num_t, n_paths, \
-            x_vec_dim))
+    dB_shared = np_rng.normal(0, np.sqrt(dt), size=(num_t, n_paths, x_vec_dim))
 
     var = np.sum(sigma(t)**2 * dt)
 
@@ -198,7 +200,7 @@ def test_vectorized_euler_and_gradient(n_paths, system):
     grad_g_serial = []
     for i in range(n_paths):
         x1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1, \
-                dB=dB_shared[:, i:i+1, :])
+                dB_shared[:, i:i+1, :], np_rng)
         X1_serial.append(x1)
 
         w_grad_E_serial = system.gradenergy(x1)
@@ -209,7 +211,7 @@ def test_vectorized_euler_and_gradient(n_paths, system):
     grad_g_serial = np.concatenate(grad_g_serial, axis=0)
 
     X1_vectorized = euler_maruyama(t, model, num_t, dt, sigma, freqs, \
-            x_vec_dim, n_paths, dB=dB_shared)
+            x_vec_dim, n_paths, dB_shared, np_rng)
 
     w_grad_E_vectorized = system.gradenergy(X1_vectorized)
     grad_g_vectorized = calculate_grad_g(X1_vectorized, var, x_vec_dim, \

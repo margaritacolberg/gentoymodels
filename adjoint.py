@@ -21,9 +21,7 @@ from systems import *
 def main(args):
     # set seed for reproducibility
     seed = 22
-    py_rng = random.Random(seed)
-    np_rng = np.random.default_rng(seed)
-    torch.manual_seed(seed)
+    py_rng, np_rng = seed_all(seed)
 
     dt = 0.008
     t_0 = 0.
@@ -81,6 +79,7 @@ def main(args):
 
     loss = []
     drift = []
+    avg_w_grad_E = np.zeros(args.epochs)
     for j in range(args.epochs):
         # Gaussian noise term for infinitesimal step of Brownian motion
         dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, args.n_paths, \
@@ -140,6 +139,9 @@ def main(args):
 
         loss.append(accum_loss)
 
+        if args.energy_type == 'gmm':
+            avg_w_grad_E[j] = np.mean(system.gradenergy(X1))
+
         print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
@@ -198,6 +200,14 @@ def main(args):
     plt.savefig('drift.png')
     plt.close()
 
+    plt.plot(epochs, avg_w_grad_E)
+    plt.title('Average whitened gradient of the energy vs. epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Avg. whitened grad. E')
+    plt.tight_layout()
+    plt.savefig('avg_w_grad_E.png')
+    plt.close()
+
     header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs', \
             'n_paths', 'energy_type', 'ml_mean', 'ml_std', 'th_mean', \
             'th_std']]
@@ -209,6 +219,14 @@ def main(args):
         writer = csv.writer(output_csv)
         writer.writerows(header)
         writer.writerows(output)
+
+
+def seed_all(seed):
+    py_rng = random.Random(seed)
+    np_rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+
+    return py_rng, np_rng
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
