@@ -20,7 +20,7 @@ from systems import *
 
 def main(args):
     # set seed for reproducibility
-    seed = 42
+    seed = 22
     py_rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -34,8 +34,8 @@ def main(args):
     tau = 1
     buffer = None
 
-    batch_size = 256
-    n_inner_loop = 10
+    batch_size = 128
+    n_inner_loop = 5
 
     if args.energy_type == 'gmm':
         # Gaussian mixture model parameters
@@ -79,6 +79,8 @@ def main(args):
     model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, \
             output_size, args.lr)
 
+    loss = []
+    drift = []
     for j in range(args.epochs):
         # Gaussian noise term for infinitesimal step of Brownian motion
         dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, args.n_paths, \
@@ -134,6 +136,10 @@ def main(args):
             batch_loss.backward()
             optimizer.step()
 
+        drift.append(drift_per_epoch(freqs, X1, model))
+
+        loss.append(accum_loss)
+
         print('epoch: {}, train loss: {}'.format(j, accum_loss))
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
@@ -171,6 +177,25 @@ def main(args):
     plt.ylabel('y')
     plt.tight_layout()
     plt.savefig(f'boltz_2d_ml_{args.energy_type}.png')
+    plt.close()
+
+    epochs = np.arange(0, args.epochs, 1)
+    plt.plot(epochs, loss)
+    plt.title('Loss vs. epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.tight_layout()
+    plt.savefig('loss.png')
+    plt.close()
+
+    drift = np.array(drift)
+    mean_drift_dim0 = drift.mean(axis=1)[:, 0]
+    plt.plot(epochs, mean_drift_dim0)
+    plt.title('Drift vs. epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Drift')
+    plt.tight_layout()
+    plt.savefig('drift.png')
     plt.close()
 
     header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs', \
@@ -289,6 +314,21 @@ def fourier(t, freqs):
         t_fourier.append(t_fourier_i)
 
     return np.array(t_fourier)
+
+
+def drift_per_epoch(freqs, X1, model):
+    # only need time at the endpoint of each path
+    t_1_fourier = fourier([1.0], freqs)
+    t_1 = torch.tensor(t_1_fourier, dtype=torch.float32).repeat(X1.shape[0], 1)
+
+    X1 = torch.tensor(X1, dtype=torch.float32)
+
+    features = torch.cat((X1, t_1), dim=1)
+
+    with torch.no_grad():
+        u_theta = model(features).numpy()
+
+    return u_theta
 
 
 def plot_theoretical_contour(energy_type, tau, system):
