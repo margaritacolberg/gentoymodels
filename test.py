@@ -71,6 +71,11 @@ def main():
     plot_euler_maruyama_output(n_paths, np_rng)
     test_vectorized_euler_and_gradient(n_paths, np_rng, system)
 
+    t = np.array([1.0, 2.0])
+    t_fourier = fourier(t, 3)
+    t_fourier_check = fourier_check(t, 3)
+    assert np.allclose(t_fourier, t_fourier_check, atol=1e-6)
+
 
 def finite_difference(f, x, eps=1e-6):
     grad_fd = np.zeros_like(x)
@@ -219,6 +224,20 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
 
     assert np.allclose(X1_serial, X1_vectorized, atol=1e-6)
     assert np.allclose(grad_g_serial, grad_g_vectorized, atol=1e-6)
+
+
+def fourier_check(t, freqs):
+    t_fourier = []
+    for i in range(len(t)):
+        t_fourier_i = []
+        for j in range(1, freqs + 1):
+            t_val = t[i]
+            t_fourier_i.append(np.cos(j * np.pi * t[i]))
+            t_fourier_i.append(np.sin(j * np.pi * t[i]))
+
+        t_fourier.append(t_fourier_i)
+
+    return np.array(t_fourier)
 
 
 if __name__ == '__main__':

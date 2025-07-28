@@ -77,7 +77,7 @@ def main(args):
     model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, \
             output_size, args.lr)
 
-    loss = []
+    loss = np.zeros(args.epochs)
     drift = []
     avg_w_grad_E = np.zeros(args.epochs)
     for j in range(args.epochs):
@@ -121,7 +121,6 @@ def main(args):
             sample_t = fourier(sample_t, freqs)
 
             Xt = torch.tensor(Xt, dtype=torch.float32)
-            Xt = Xt - Xt.mean(dim=0, keepdim=True)
             sample_t = torch.tensor(sample_t, dtype=torch.float32)
             label = torch.tensor(label, dtype=torch.float32)
             weight = torch.tensor(weight, dtype=torch.float32)
@@ -135,9 +134,9 @@ def main(args):
             batch_loss.backward()
             optimizer.step()
 
-        drift.append(drift_per_epoch(freqs, X1, model))
+        loss[j] = accum_loss
 
-        loss.append(accum_loss)
+        drift.append(drift_per_epoch(freqs, X1, model))
 
         if args.energy_type == 'gmm':
             avg_w_grad_E[j] = np.mean(system.gradenergy(X1))
@@ -321,17 +320,21 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
 
 
 def fourier(t, freqs):
-    t_fourier = []
-    for i in range(len(t)):
-        t_fourier_i = []
-        for j in range(1, freqs + 1):
-            t_val = t[i]
-            t_fourier_i.append(np.cos(j * np.pi * t[i]))
-            t_fourier_i.append(np.sin(j * np.pi * t[i]))
+    t = np.asarray(t)
+    t = t[:, None]
 
-        t_fourier.append(t_fourier_i)
+    i = np.arange(1, freqs+1)
 
-    return np.array(t_fourier)
+    angles = i * np.pi * t
+    emb_cos = np.cos(angles)
+    emb_sin = np.sin(angles)
+
+    # interleave cos and sin
+    emb = np.empty((t.shape[0], 2 * freqs), dtype=np.float64)
+    emb[:, 0::2] = emb_cos
+    emb[:, 1::2] = emb_sin
+
+    return emb
 
 
 def drift_per_epoch(freqs, X1, model):
