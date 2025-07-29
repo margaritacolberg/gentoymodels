@@ -15,6 +15,7 @@ from scipy.stats import multivariate_normal
 from sklearn.preprocessing import normalize
 
 from model import *
+from buffer import *
 from systems import *
 
 
@@ -30,7 +31,7 @@ def main(args):
     t = np.linspace(t_0, t_1, num_t) 
 
     tau = 1
-    buffer = None
+    buffer = BatchBuffer(buffer_size=2000)
 
     batch_size = 128
     n_inner_loop = 5
@@ -98,17 +99,11 @@ def main(args):
         else:
             grad_g = (-X1 / var) + (X1 / tau)
 
-        pairs = np.concatenate([X1, grad_g], axis=1)
-
-        if buffer is None:
-            buffer = pairs
-        else:
-            buffer = np.vstack([buffer, pairs])
+        buffer.add(X1, grad_g)
 
         accum_loss = 0
         for k in range(n_inner_loop):
-            indices = py_rng.choices(range(len(buffer)), k=batch_size)
-            sample_buffer = np.array([buffer[i] for i in indices])
+            sample_buffer = buffer.sample(batch_size, np_rng)
             sample_t = py_rng.choices(t, k=batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
@@ -319,6 +314,10 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
     return Xt, label, weight
 
 
+# Fourier transform applied to time to expand the input space and help the
+# network avoid struggles with learning large changes in drift; lower frequency
+# times are for learning smaller drift changes, and larger frequency times are
+# for learning larger drift changes
 def fourier(t, freqs):
     t = np.asarray(t)
     t = t[:, None]

@@ -1,6 +1,7 @@
 import numpy as np
 
 from adjoint import *
+from buffer import *
 from systems import *
 
 
@@ -75,6 +76,8 @@ def main():
     t_fourier = fourier(t, 3)
     t_fourier_check = fourier_check(t, 3)
     assert np.allclose(t_fourier, t_fourier_check, atol=1e-6)
+
+    test_buffer_clearing()
 
 
 def finite_difference(f, x, eps=1e-6):
@@ -226,18 +229,43 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
     assert np.allclose(grad_g_serial, grad_g_vectorized, atol=1e-6)
 
 
+# implement FT in a naive but straightforward way using nested for loops;
+# intentionally simple but computationally expensive, designed only to verify
+# the vectorized version in the main program
 def fourier_check(t, freqs):
     t_fourier = []
     for i in range(len(t)):
         t_fourier_i = []
         for j in range(1, freqs + 1):
-            t_val = t[i]
             t_fourier_i.append(np.cos(j * np.pi * t[i]))
             t_fourier_i.append(np.sin(j * np.pi * t[i]))
 
         t_fourier.append(t_fourier_i)
 
     return np.array(t_fourier)
+
+
+def test_buffer_clearing():
+    np_rng = np.random.default_rng(42)
+    buffer = BatchBuffer(buffer_size=5)
+
+    X1_batch = np.array([[1, 1], [2, 2], [3, 3]])
+    grad_g_batch = np.array([[10, 10], [20, 20], [30, 30]])
+    buffer.add(X1_batch, grad_g_batch)
+
+    # add more items than buffer_size to see FIFO behaviour
+    X1_batch2 = np.array([[4, 4], [5, 5], [6, 6]])
+    grad_g_batch2 = np.array([[40, 40], [50, 50], [60, 60]])
+    buffer.add(X1_batch2, grad_g_batch2)
+
+    # the buffer should keep only the last 5 items
+    # the first item, (X1=[1,1], grad_g=[10,10]), should be gone
+    first_item = np.concatenate([[1,1], [10,10]])
+
+    exists = any(np.array_equal(data, first_item) for data in buffer.data)
+
+    assert not exists, \
+            "test failed: first item should have been removed from buffer"
 
 
 if __name__ == '__main__':
