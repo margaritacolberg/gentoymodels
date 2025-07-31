@@ -16,6 +16,7 @@ from sklearn.preprocessing import normalize
 
 from model import *
 from buffer import *
+from clipper import *
 from systems import *
 
 
@@ -31,10 +32,8 @@ def main(args):
     t = np.linspace(t_0, t_1, num_t) 
 
     tau = 1
-    buffer = BatchBuffer(buffer_size=2000)
-
-    batch_size = 128
-    n_inner_loop = 5
+    buffer = BatchBuffer(buffer_size=2 * args.n_paths)
+    clipper = Clipper(max_norm=args.max_score_norm)
 
     if args.energy_type == 'gmm':
         # Gaussian mixture model parameters
@@ -76,7 +75,7 @@ def main(args):
     freqs = 3
 
     model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, \
-            output_size, args.lr)
+            output_size, args.num_hidden, args.lr)
 
     loss = np.zeros(args.epochs)
     drift = []
@@ -95,20 +94,23 @@ def main(args):
 
         if args.energy_type == 'gmm':
             w_grad_E = system.gradenergy(X1)
-            grad_g = calculate_grad_g(X1, var, x_vec_dim, w_grad_E)
+            grad_g = calculate_grad_g(X1, var, x_vec_dim, w_grad_E, clipper)
         else:
             grad_g = (-X1 / var) + (X1 / tau)
 
         buffer.add(X1, grad_g)
 
         accum_loss = 0
-        for k in range(n_inner_loop):
-            sample_buffer = buffer.sample(batch_size, np_rng)
-            sample_t = py_rng.choices(t, k=batch_size)
+        for k in range(args.n_inner_loop):
+            sample_buffer = buffer.sample(args.batch_size, np_rng)
+            # sample t uniformly in [0,1) independent of Euler-Maruyama grid
+            # (since this grid is coarse and includes t=1 endpoint) to train
+            # drift at arbitrary times
+            sample_t = np_rng.random(args.batch_size)
 
             Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, batch_size, \
-                    np_rng)
+                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, \
+                    args.batch_size, np_rng)
 
             assert len(Xt) == len(sample_t), \
                     'len of Xt and t vectors do not match'
@@ -165,8 +167,8 @@ def main(args):
                 plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
 
     plt.figure(figsize=(8, 6))
-    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]], \
-            density=True)
+    plt.hist2d(X1_x_slice, X1_y_slice, bins=70, range=[[-10, 10], [-10, 10]], \
+            density=True, alpha=0.9)
     plt.colorbar(label=r'$\mu(x)$')
     plt.title(f'2D Boltzmann distribution from ML samples ({args.energy_type})')
     plt.xlabel('x')
@@ -205,7 +207,7 @@ def main(args):
     header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs', \
             'n_paths', 'energy_type', 'ml_mean', 'ml_std', 'th_mean', \
             'th_std']]
-    output = [[batch_size, n_inner_loop, args.hidden_size, args.lr, \
+    output = [[args.batch_size, args.n_inner_loop, args.hidden_size, args.lr, \
             args.epochs, args.n_paths, args.energy_type, ml_mean, ml_std, \
             th_mean, th_std]]
 
@@ -223,8 +225,8 @@ def seed_all(seed):
     return py_rng, np_rng
 
 
-def load_model(input_dim, hidden_dim, output_dim, lr):
-    model = MLP_adjoint(input_dim, hidden_dim, output_dim)
+def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
+    model = MLP_adjoint(input_dim, hidden_dim, output_dim, num_hidden)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     return model, optimizer
@@ -257,13 +259,13 @@ def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, \
     return x[-1]
 
 
-def calculate_grad_g(x, var, x_vec_dim, grad_E):
+def calculate_grad_g(x, var, x_vec_dim, grad_E, clipper):
     # base distribution is multivariate normal probability density function
     # with mean 0, since there is no drift in base process
     mu_base = np.zeros(x_vec_dim)
     grad_log_p_base = -(x - mu_base) / var
 
-    return grad_log_p_base + grad_E
+    return clipper.clip(grad_log_p_base + grad_E)
 
 
 def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
@@ -277,7 +279,7 @@ def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
 
     D, Q = np.linalg.eigh(inv_cov_gmm)
     D_sqrt = np.diag(np.sqrt(D + 1e-5))
-    W = D_sqrt @ Q.T
+    W = D_sqrt @ Q.T  # PCA-whitening
 
     return m, W
 
@@ -407,10 +409,14 @@ def plot_1D_slices(energy_type, x, y, boltz, X1_x_slice):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('csv', help='csv output file')
-    parser.add_argument('--hidden_size', type=int, default=32)
+    parser.add_argument('--hidden_size', type=int, default=128)
+    parser.add_argument('--num_hidden', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--n_inner_loop', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--n_paths', type=int, default=100)
+    parser.add_argument('--max_score_norm', type=float, default=50.0)
     parser.add_argument('--energy_type', type=str, default='well', \
             choices=['well', 'gmm'])
 

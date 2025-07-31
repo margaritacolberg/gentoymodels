@@ -2,6 +2,7 @@ import numpy as np
 
 from adjoint import *
 from buffer import *
+from clipper import *
 from systems import *
 
 
@@ -78,6 +79,7 @@ def main():
     assert np.allclose(t_fourier, t_fourier_check, atol=1e-6)
 
     test_buffer_clearing()
+    test_clipper()
 
 
 def finite_difference(f, x, eps=1e-6):
@@ -266,6 +268,29 @@ def test_buffer_clearing():
 
     assert not exists, \
             "test failed: first item should have been removed from buffer"
+
+
+def test_clipper():
+    clipper = Clipper(max_norm=5.0)
+
+    # case 1: vector norm smaller than max_norm (no change)
+    small = np.array([[3.0, 4.0]])  # norm = 5.0, exactly at boundary
+    out = clipper.clip(small)
+    assert np.allclose(out, small)
+
+    # case 2: vector norm larger than max_norm (must clip)
+    big = np.array([[6.0, 8.0]])  # norm = 10.0 > max_norm
+    out = clipper.clip(big)
+    norm_out = np.linalg.norm(out)
+    assert np.isclose(norm_out, 5.0, atol=1e-6)
+
+    # case 3: multiple vectors; first vector norm larger than max_norm but
+    # second vector norm smaller than max_norm (clip only the first)
+    batch = np.array([[6.0, 8.0], [1.0, 2.0]])
+    out = clipper.clip(batch)
+    norms_out = np.linalg.norm(out, axis=-1)
+    assert np.isclose(norms_out[0], 5.0, atol=1e-6)
+    assert np.isclose(norms_out[1], np.linalg.norm([1.0, 2.0]))
 
 
 if __name__ == '__main__':

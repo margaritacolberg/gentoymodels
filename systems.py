@@ -28,20 +28,20 @@ class GMMSystem(System):
                 np.log(np.sum(np.exp(self.log_w - self.max_w)))
 
     def energy(self, x):
-        log_p_i = np.stack([
-            np.atleast_1d(multivariate_normal.logpdf(x, mean=mu, cov=cov))
+        log_p_i = np.column_stack([
+            multivariate_normal.logpdf(x, mean=mu, cov=cov)
             for (mu, cov) in zip(self.mus, self.covs)
-        ], axis=1)
+        ])
 
         weighted_log_p_i = self.log_norm_weights + log_p_i
 
         return -logsumexp(weighted_log_p_i, axis=1, keepdims=True)
 
     def gradenergy(self, x):
-        log_p_i = np.stack([
-            np.atleast_1d(multivariate_normal.logpdf(x, mean=mu, cov=cov))
+        log_p_i = np.column_stack([
+            multivariate_normal.logpdf(x, mean=mu, cov=cov)
             for (mu, cov) in zip(self.mus, self.covs)
-        ], axis=1)
+        ])
 
         weighted_log_p_i = self.log_norm_weights + log_p_i
 
@@ -65,23 +65,13 @@ class AffineSystem(System):
 
     def energy(self, y):
         ss = self.subsystem
-        y = np.atleast_2d(y)
-
-        x = np.stack([
-            np.linalg.solve(self.W, y_i) + self.m
-            for y_i in y
-        ])
+        x = np.linalg.solve(self.W, y.T).T + self.m
 
         return ss.energy(x)
 
     def gradenergy(self, y):
         ss = self.subsystem
-        y = np.atleast_2d(y)
-
-        x = np.stack([
-            np.linalg.solve(self.W, y_i) + self.m
-            for y_i in y
-        ])
+        x = np.linalg.solve(self.W, y.T).T + self.m
 
         grad_x = ss.gradenergy(x)
         grad_y = np.stack([np.linalg.solve(self.W.T, g) for g in grad_x])
