@@ -19,27 +19,30 @@ def main(args):
     t_0 = 0.
     t_1 = 1.
     num_t = int(t_1 / dt)
-    t_path = np.linspace(t_0, t_1, num_t) 
+    t_path = np.linspace(t_0, t_1, num_t)
 
     # var of Boltzmann distribution
     tau = 1
     # var of Gaussian distribution
     sigma_q = 1
 
-    batch_size = 128
+    batch_size = 256
 
     # inputs: x_{t+dt}, t+dt
     input_size = 2
     # output: f(x_{t+dt}, t+dt)
     output_size = 1
 
-    model, loss_fnc, optimizer = load_model(input_size, args.hidden_size, \
-            output_size, args.lr)
+    model, loss_fnc, optimizer = load_model(
+        input_size, args.hidden_size, output_size, args.lr
+    )
 
     for i in range(args.epochs):
         accum_loss = 0
-        forward_process(model, loss_fnc, optimizer, tau, batch_size, t_0, t_1, \
-                dt, sigma_q, accum_loss, i)
+        forward_process(
+            model, loss_fnc, optimizer, tau, batch_size,
+            t_0, t_1, dt, sigma_q, accum_loss, i
+        )
 
     x0_val = []
     # create a distribution of x0 estimates
@@ -81,15 +84,19 @@ def main(args):
 
 
 def load_model(input_dim, hidden_dim, output_dim, lr):
-    model = MLP_ddpm(input_dim, hidden_dim, output_dim)
+    model = MLP(
+        input_dim, hidden_dim, output_dim, num_hidden=4, activation='relu'
+    )
     loss_fnc = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     return model, loss_fnc, optimizer
 
 
-def forward_process(model, loss_fnc, optimizer, tau, batch_size, t_0, t_1, \
-        dt, sigma_q, accum_loss, i):
+def forward_process(
+    model, loss_fnc, optimizer, tau, batch_size,
+    t_0, t_1, dt, sigma_q, accum_loss, i
+):
     x0 = np.random.normal(0, np.sqrt(tau), size=batch_size)
     # sample t in [0, 1 - dt] to avoid exceeding time range when
     # calculating xt_plus_dt
@@ -98,8 +105,9 @@ def forward_process(model, loss_fnc, optimizer, tau, batch_size, t_0, t_1, \
     xt_plus_dt = xt + np.random.normal(0, sigma_q * np.sqrt(dt))
     t_plus_dt = t + dt
 
-    assert len(xt_plus_dt) == len(t_plus_dt), \
-            'len of xt_plus_dt and t_plus_dt vectors do not match'
+    assert len(xt_plus_dt) == len(t_plus_dt), (
+        'len of xt_plus_dt and t_plus_dt vectors do not match'
+    )
 
     xt = torch.tensor(xt, dtype=torch.float32)
     xt_plus_dt = torch.tensor(xt_plus_dt, dtype=torch.float32)
@@ -141,15 +149,15 @@ def reverse_process(model, sigma_q, t_1, num_t, dt):
 def sanity_check(x_t, t, sigma_q):
     mean = x_t / (1 + sigma_q**2 * t)
     var = (sigma_q**2 * t) / (1 + sigma_q**2 * t)
-    
+
     return np.random.normal(mean, np.sqrt(var))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--hidden_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--hidden_size', type=int, default=128)
+    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--epochs', type=int, default=3000)
 
     args = parser.parse_args()
 

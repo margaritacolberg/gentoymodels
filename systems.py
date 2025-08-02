@@ -5,14 +5,14 @@ from scipy.stats import multivariate_normal
 
 class System:
 
-	def __init__(self):
-		pass
+    def __init__(self):
+        pass
 
-	def energy(self, x):
-		pass
+    def energy(self, x):
+        pass
 
-	def gradenergy(self, x):
-		pass
+    def gradenergy(self, x):
+        pass
 
 
 class GMMSystem(System):
@@ -24,8 +24,10 @@ class GMMSystem(System):
         self.log_w = log_w
 
         self.max_w = np.max(self.log_w)
-        self.log_norm_weights = self.log_w - self.max_w - \
-                np.log(np.sum(np.exp(self.log_w - self.max_w)))
+        self.log_norm_weights = (
+            self.log_w - self.max_w
+            - np.log(np.sum(np.exp(self.log_w - self.max_w)))
+        )
 
     def energy(self, x):
         log_p_i = np.column_stack([
@@ -81,14 +83,14 @@ class AffineSystem(System):
 
 class TemperatureSystem(AffineSystem):
 
-	def __init__(self, subsystem, t):
-		self.subsystem = subsystem
-		self.t = t
+    def __init__(self, subsystem, t):
+        self.subsystem = subsystem
+        self.t = t
 
-	def energy(self, x):
-		ss = self.subsystem
-		return ss.energy(x) / self.t
+    def energy(self, x):
+        ss = self.subsystem
+        return ss.energy(x) / self.t
 
-	def gradenergy(self, x):
-		ss = self.subsystem
-		return ss.gradenergy(x) / self.t
+    def gradenergy(self, x):
+        ss = self.subsystem
+        return ss.gradenergy(x) / self.t

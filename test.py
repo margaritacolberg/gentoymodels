@@ -23,8 +23,9 @@ def main():
 
     n_paths = 100
 
-    gmm = GMMSystem(mus=[mu1, mu2], covs=[cov1, cov2], \
-            log_w=np.log(np.array([w1, w2])))
+    gmm = GMMSystem(
+        mus=[mu1, mu2], covs=[cov1, cov2], log_w=np.log(np.array([w1, w2]))
+    )
 
     affine = AffineSystem(gmm, W=W, m=m)
 
@@ -152,8 +153,9 @@ def plot_euler_maruyama_output(n_paths, np_rng):
     sigma_max = 1.5
     sigma_min = 0.05
     sigma_diff = sigma_max / sigma_min
-    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
-            * (2 * np.log(sigma_diff))**0.5
+    sigma = lambda time: (
+        sigma_min * sigma_diff**(1 - time) * (2 * np.log(sigma_diff))**0.5
+    )
 
     x_vec_dim = 2
 
@@ -161,15 +163,19 @@ def plot_euler_maruyama_output(n_paths, np_rng):
 
     model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
 
-    X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
-            n_paths, None, np_rng)
+    X1 = euler_maruyama(
+        t, model, num_t, dt, sigma, freqs,
+        x_vec_dim, n_paths, None, np_rng
+    )
 
     X1_x_slice = X1[:, 0]
     X1_y_slice = X1[:, 1]
 
     plt.figure(figsize=(8, 6))
-    plt.hist2d(X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]], \
-            density=True)
+    plt.hist2d(
+        X1_x_slice, X1_y_slice, bins=50, range=[[-10, 10], [-10, 10]],
+        density=True
+    )
     plt.colorbar(label=r'$\mu(x)$')
     plt.title(f'Initial distribution of points from Euler-Maruyama paths')
     plt.xlabel('x')
@@ -192,8 +198,9 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
     sigma_max = 1.5
     sigma_min = 0.05
     sigma_diff = sigma_max / sigma_min
-    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
-            * (2 * np.log(sigma_diff))**0.5
+    sigma = lambda time: (
+        sigma_min * sigma_diff**(1 - time) * (2 * np.log(sigma_diff))**0.5
+    )
 
     x_vec_dim = 2
 
@@ -209,23 +216,29 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
     X1_serial = []
     grad_g_serial = []
     for i in range(n_paths):
-        x1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, 1, \
-                dB_shared[:, i:i+1, :], np_rng)
+        x1 = euler_maruyama(
+            t, model, num_t, dt, sigma, freqs,
+            x_vec_dim, 1, dB_shared[:, i:i+1, :], np_rng
+        )
         X1_serial.append(x1)
 
         w_grad_E_serial = system.gradenergy(x1)
-        grad_g_serial.append(calculate_grad_g(x1, var, x_vec_dim, \
-                w_grad_E_serial))
+        grad_g_serial.append(
+            calculate_grad_g(x1, var, x_vec_dim, w_grad_E_serial)
+        )
 
     X1_serial = np.concatenate(X1_serial, axis=0)
     grad_g_serial = np.concatenate(grad_g_serial, axis=0)
 
-    X1_vectorized = euler_maruyama(t, model, num_t, dt, sigma, freqs, \
-            x_vec_dim, n_paths, dB_shared, np_rng)
+    X1_vectorized = euler_maruyama(
+        t, model, num_t, dt, sigma, freqs,
+        x_vec_dim, n_paths, dB_shared, np_rng
+    )
 
     w_grad_E_vectorized = system.gradenergy(X1_vectorized)
-    grad_g_vectorized = calculate_grad_g(X1_vectorized, var, x_vec_dim, \
-            w_grad_E_vectorized)
+    grad_g_vectorized = calculate_grad_g(
+        X1_vectorized, var, x_vec_dim, w_grad_E_vectorized
+    )
 
     assert np.allclose(X1_serial, X1_vectorized, atol=1e-6)
     assert np.allclose(grad_g_serial, grad_g_vectorized, atol=1e-6)
@@ -262,12 +275,13 @@ def test_buffer_clearing():
 
     # the buffer should keep only the last 5 items
     # the first item, (X1=[1,1], grad_g=[10,10]), should be gone
-    first_item = np.concatenate([[1,1], [10,10]])
+    first_item = np.concatenate([[1, 1], [10, 10]])
 
     exists = any(np.array_equal(data, first_item) for data in buffer.data)
 
-    assert not exists, \
-            "test failed: first item should have been removed from buffer"
+    assert not exists, (
+        'test failed: first item should have been removed from buffer'
+    )
 
 
 def test_clipper():

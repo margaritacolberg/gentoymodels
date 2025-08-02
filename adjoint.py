@@ -1,8 +1,11 @@
 # adjoint.py is a 1D toy implementation of adjoint sampling, based on
 # pseudocode on p. 6 from Havens et al.'s preprint "Adjoint Sampling: Highly
 # Scalable Diffusion Samplers via Adjoint Matching"; in this program, a drift
-# function in an SDE is trained to sample from a 1D Boltzmann distribution
+# function in an SDE is trained to sample from a 2D Boltzmann distribution
 # using the adjoint matching algorithm
+#
+# example of how to run (if energy is a single well):
+# python adjoint.py test.csv
 
 import argparse
 import csv
@@ -29,10 +32,10 @@ def main(args):
     t_0 = 0.
     t_1 = 1.
     num_t = int(t_1 / dt)
-    t = np.linspace(t_0, t_1, num_t) 
+    t = np.linspace(t_0, t_1, num_t)
 
     tau = 1
-    buffer = BatchBuffer(buffer_size=2 * args.n_paths)
+    buffer = BatchBuffer(buffer_size=args.n_paths)
     clipper = Clipper(max_norm=args.max_score_norm)
 
     if args.energy_type == 'gmm':
@@ -45,25 +48,26 @@ def main(args):
         # weights
         w1, w2 = 0.5, 0.5
 
-        sigma_max = 1.5
-
         # whitening
         m, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
 
-        gmm = GMMSystem(mus=[mu1, mu2], covs=[cov1, cov2], \
-                log_w=np.log(np.array([w1, w2])))
+        gmm = GMMSystem(
+            mus=[mu1, mu2], covs=[cov1, cov2], log_w=np.log(np.array([w1, w2]))
+        )
 
         affine = AffineSystem(gmm, W=W, m=m)
 
         system = TemperatureSystem(affine, t=1.0)
-    else:
-        sigma_max = 1.0
+
+        avg_w_grad_E = np.zeros(args.epochs)
 
     # geometric noise schedule
+    sigma_max = 1.5
     sigma_min = 0.05
     sigma_diff = sigma_max / sigma_min
-    sigma = lambda time: sigma_min * sigma_diff**(1 - time) \
-            * (2 * np.log(sigma_diff))**0.5
+    sigma = lambda time: (
+        sigma_min * sigma_diff**(1 - time) * (2 * np.log(sigma_diff))**0.5
+    )
 
     x_vec_dim = 2
 
@@ -74,19 +78,23 @@ def main(args):
 
     freqs = 3
 
-    model, optimizer = load_model(input_size + 2 * freqs, args.hidden_size, \
-            output_size, args.num_hidden, args.lr)
+    model, optimizer = load_model(
+        input_size + 2 * freqs, args.hidden_size,
+        output_size, args.num_hidden, args.lr
+    )
 
     loss = np.zeros(args.epochs)
     drift = []
-    avg_w_grad_E = np.zeros(args.epochs)
     for j in range(args.epochs):
         # Gaussian noise term for infinitesimal step of Brownian motion
-        dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, args.n_paths, \
-                x_vec_dim))
+        dB = np_rng.normal(
+            0, np.sqrt(dt), size=(num_t, args.n_paths, x_vec_dim)
+        )
 
-        X1 = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
-                args.n_paths, dB, np_rng)
+        X1 = euler_maruyama(
+            t, model, num_t, dt, sigma, freqs,
+            x_vec_dim, args.n_paths, dB, np_rng
+        )
 
         # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
         # cumulative var of full path
@@ -104,16 +112,17 @@ def main(args):
         for k in range(args.n_inner_loop):
             sample_buffer = buffer.sample(args.batch_size, np_rng)
             # sample t uniformly in [0,1) independent of Euler-Maruyama grid
-            # (since this grid is coarse and includes t=1 endpoint) to train
-            # drift at arbitrary times
+            # (since this grid is coarse) to train drift at arbitrary times
             sample_t = np_rng.random(args.batch_size)
 
-            Xt, label, weight = get_Xt_label_weight(sample_t, sample_buffer, \
-                    sigma, dt, sigma_max, sigma_diff, x_vec_dim, \
-                    args.batch_size, np_rng)
+            Xt, label, weight = get_Xt_label_weight(
+                sample_t, sample_buffer, sigma, dt, sigma_max,
+                sigma_diff, x_vec_dim, args.batch_size, np_rng
+            )
 
-            assert len(Xt) == len(sample_t), \
-                    'len of Xt and t vectors do not match'
+            assert len(Xt) == len(sample_t), (
+                'len of Xt and t vectors do not match'
+            )
 
             sample_t = fourier(sample_t, freqs)
 
@@ -138,12 +147,18 @@ def main(args):
         if args.energy_type == 'gmm':
             avg_w_grad_E[j] = np.mean(system.gradenergy(X1))
 
-        print('epoch: {}, train loss: {}'.format(j, accum_loss))
+        print(
+            'epoch: {}, train loss: {}'.format(
+                j, accum_loss / args.n_inner_loop
+            )
+        )
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
-    X1_val = euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, \
-            1000, None, np_rng)
+    X1_val = euler_maruyama(
+        t, model, num_t, dt, sigma, freqs, x_vec_dim, 1000, None, np_rng
+    )
 
+    epochs = np.arange(0, args.epochs, 1)
     if args.energy_type == 'gmm':
         print('whitened mean:', np.mean(X1_val, axis=0))
         print('whitened cov:', np.cov(X1_val.T))
@@ -153,32 +168,48 @@ def main(args):
         X1_x_slice = X1_unwhitened[:, 0]
         X1_y_slice = X1_unwhitened[:, 1]
 
-        x_th, y_th, boltz = plot_theoretical_contour(args.energy_type, tau, \
-                gmm)
-        ml_mean, ml_std, th_mean, th_std = \
-                plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
+        x_th, y_th, boltz = plot_theoretical_contour(
+            args.energy_type, tau, gmm
+        )
+        ml_mean, ml_std, th_mean, th_std = plot_1D_slices(
+            args.energy_type, x_th, y_th, boltz, X1_x_slice
+        )
+
+        # training check: should approach 0 if sampler learns correct drift
+        plt.plot(epochs, avg_w_grad_E)
+        plt.title('Average whitened gradient of the energy vs. epoch')
+        plt.xlabel('Epoch')
+        plt.ylabel('Avg. whitened grad. E')
+        plt.tight_layout()
+        plt.savefig('avg_w_grad_E.png')
+        plt.close()
     else:
         X1_x_slice = X1_val[:, 0]
         X1_y_slice = X1_val[:, 1]
 
-        x_th, y_th, boltz = plot_theoretical_contour(args.energy_type, tau, \
-                None)
-        ml_mean, ml_std, th_mean, th_std = \
-                plot_1D_slices(args.energy_type, x_th, y_th, boltz, X1_x_slice)
+        x_th, y_th, boltz = plot_theoretical_contour(
+            args.energy_type, tau, None
+        )
+        ml_mean, ml_std, th_mean, th_std = plot_1D_slices(
+            args.energy_type, x_th, y_th, boltz, X1_x_slice
+        )
 
     plt.figure(figsize=(8, 6))
-    plt.hist2d(X1_x_slice, X1_y_slice, bins=70, range=[[-10, 10], [-10, 10]], \
-            density=True, alpha=0.9)
+    plt.hist2d(
+        X1_x_slice, X1_y_slice, bins=70, range=[[-10, 10], [-10, 10]],
+        density=True, alpha=0.9
+    )
     plt.colorbar(label=r'$\mu(x)$')
-    plt.title(f'2D Boltzmann distribution from ML samples ({args.energy_type})')
+    plt.title(
+        f'2D Boltzmann distribution from ML samples ({args.energy_type})'
+    )
     plt.xlabel('x')
     plt.ylabel('y')
     plt.tight_layout()
     plt.savefig(f'boltz_2d_ml_{args.energy_type}.png')
     plt.close()
 
-    epochs = np.arange(0, args.epochs, 1)
-    plt.plot(epochs, loss)
+    plt.plot(epochs, loss / args.n_inner_loop)
     plt.title('Loss vs. epoch')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -186,6 +217,7 @@ def main(args):
     plt.savefig('loss.png')
     plt.close()
 
+    # training check: should approach 0 if sampler learns correct drift
     drift = np.array(drift)
     mean_drift_dim0 = drift.mean(axis=1)[:, 0]
     plt.plot(epochs, mean_drift_dim0)
@@ -196,20 +228,12 @@ def main(args):
     plt.savefig('drift.png')
     plt.close()
 
-    plt.plot(epochs, avg_w_grad_E)
-    plt.title('Average whitened gradient of the energy vs. epoch')
-    plt.xlabel('Epoch')
-    plt.ylabel('Avg. whitened grad. E')
-    plt.tight_layout()
-    plt.savefig('avg_w_grad_E.png')
-    plt.close()
-
-    header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs', \
-            'n_paths', 'energy_type', 'ml_mean', 'ml_std', 'th_mean', \
-            'th_std']]
-    output = [[args.batch_size, args.n_inner_loop, args.hidden_size, args.lr, \
-            args.epochs, args.n_paths, args.energy_type, ml_mean, ml_std, \
-            th_mean, th_std]]
+    header = [['batch_size', 'n_inner_loop', 'hidden_size', 'lr', 'epochs',
+               'n_paths', 'energy_type', 'ml_mean', 'ml_std', 'th_mean',
+               'th_std']]
+    output = [[args.batch_size, args.n_inner_loop, args.hidden_size, args.lr,
+               args.epochs, args.n_paths, args.energy_type, ml_mean, ml_std,
+               th_mean, th_std]]
 
     with open(args.csv, 'w') as output_csv:
         writer = csv.writer(output_csv)
@@ -226,14 +250,18 @@ def seed_all(seed):
 
 
 def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
-    model = MLP_adjoint(input_dim, hidden_dim, output_dim, num_hidden)
+    model = MLP(
+        input_dim, hidden_dim, output_dim, num_hidden, activation='gelu'
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     return model, optimizer
 
 
-def euler_maruyama(t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, \
-        dB, np_rng):
+def euler_maruyama(
+    t, model, num_t, dt, sigma, freqs,
+    x_vec_dim, n_paths, dB, np_rng
+):
     if dB is None:
         dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, n_paths, x_vec_dim))
 
@@ -272,23 +300,26 @@ def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
     m = w1 * mu1 + w2 * mu2
 
     # derived from law of total variance
-    cov_gmm = w1 * (cov1 + np.outer(mu1 - m, mu1 - m)) + \
-            w2 * (cov2 + np.outer(mu2 - m, mu2 - m))
+    cov_gmm = (
+        w1 * (cov1 + np.outer(mu1 - m, mu1 - m))
+        + w2 * (cov2 + np.outer(mu2 - m, mu2 - m))
+    )
 
-    inv_cov_gmm = np.linalg.inv(cov_gmm)
-
-    D, Q = np.linalg.eigh(inv_cov_gmm)
-    D_sqrt = np.diag(np.sqrt(D + 1e-5))
+    D, Q = np.linalg.eigh(cov_gmm)
+    D_sqrt = np.diag(1 / np.sqrt(D))
     W = D_sqrt @ Q.T  # PCA-whitening
 
     return m, W
 
 
-def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
-        sigma_diff, x_vec_dim, batch_size, np_rng):
+def get_Xt_label_weight(
+    sample_t, sample_buffer, sigma, dt, sigma_max,
+    sigma_diff, x_vec_dim, batch_size, np_rng
+):
     sample_t = np.array(sample_t)
-    assert sample_t.ndim == 1, \
-            'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
+    assert sample_t.ndim == 1, (
+        'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
+    )
 
     # choose Xt from a distribution of paths passing through Xt that
     # all end at X1; the distribution at t = 1 is a Dirac delta with
@@ -299,6 +330,9 @@ def get_Xt_label_weight(sample_t, sample_buffer, sigma, dt, sigma_max, \
     c_s = sigma_diff**(-2 * sample_t)
     c_1 = sigma_diff**(-2)
 
+    # conditional mean and var of X_t given X_1 under the Brownian base
+    # process, derived using Bayes' rule and completing the square on Gaussian
+    # densities
     mean_Xt = ((c_s - 1) / (c_1 - 1))[:, None] * X1
     var_Xt = sigma_max**2 * (c_s - 1) * (c_s - c_1) / (c_1 - 1)
 
@@ -362,8 +396,9 @@ def plot_theoretical_contour(energy_type, tau, system):
 
     if energy_type == 'gmm':
         XY = np.column_stack([X.ravel(), Y.ravel()])
-        boltz = np.apply_along_axis(lambda x: np.exp(-system.energy(x) / tau), \
-                1, XY)
+        boltz = np.apply_along_axis(
+            lambda x: np.exp(-system.energy(x) / tau), 1, XY
+        )
         boltz = boltz.reshape(npoints, npoints)
     else:
         E = 0.5 * (X**2 + Y**2)
@@ -375,7 +410,9 @@ def plot_theoretical_contour(energy_type, tau, system):
     plt.figure(figsize=(10, 8))
     plt.contourf(x, y, boltz, levels=50)
     plt.colorbar(label=r'$\mu(x)$')
-    plt.title(f'2D Boltzmann distribution from theoretical data ({energy_type})')
+    plt.title(
+        f'2D Boltzmann distribution from theoretical data ({energy_type})'
+    )
     plt.xlabel('x')
     plt.ylabel('y')
     plt.tight_layout()
@@ -412,13 +449,13 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_size', type=int, default=128)
     parser.add_argument('--num_hidden', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--n_inner_loop', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--n_paths', type=int, default=100)
     parser.add_argument('--max_score_norm', type=float, default=50.0)
-    parser.add_argument('--energy_type', type=str, default='well', \
-            choices=['well', 'gmm'])
+    parser.add_argument('--energy_type', type=str, default='well',
+                        choices=['well', 'gmm'])
 
     args = parser.parse_args()
 

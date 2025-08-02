@@ -18,6 +18,3 @@ class BatchBuffer:
         # uniform random sample with replacement
         idx = np_rng.integers(low=0, high=len(self.data), size=batch_size)
         return np.stack([self.data[i] for i in idx], axis=0)
-
-    def __len__(self):
-        return len(self.data)
