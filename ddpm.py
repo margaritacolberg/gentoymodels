@@ -45,7 +45,7 @@ def main(args):
 
     x0_val = []
     # create a distribution of x0 estimates
-    for _ in range(10000):
+    for _ in range(5000):
         x0_val.append(reverse_process(model, sigma_q, t_1, num_t, dt))
 
     x_th = np.linspace(-5.0, 5.0, 100)
