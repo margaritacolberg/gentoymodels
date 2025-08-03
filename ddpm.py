@@ -38,15 +38,14 @@ def main(args):
     )
 
     for i in range(args.epochs):
-        accum_loss = 0
         forward_process(
-            model, loss_fnc, optimizer, tau, batch_size,
-            t_0, t_1, dt, sigma_q, accum_loss, i
+            model, loss_fnc, optimizer, tau,
+            batch_size, t_0, t_1, dt, sigma_q, i
         )
 
     x0_val = []
     # create a distribution of x0 estimates
-    for _ in range(5000):
+    for _ in range(10000):
         x0_val.append(reverse_process(model, sigma_q, t_1, num_t, dt))
 
     x_th = np.linspace(-5.0, 5.0, 100)
@@ -67,10 +66,16 @@ def main(args):
             x = sanity_check(x, t, sigma_q)
         x_calc.append(x)
 
-    print('Mean: {}, std: {} of ML-predicted Boltzmann distribution'.format( \
-            np.mean(x0_val), np.std(x0_val)))
-    print('Mean: {}, std: {} of theoretical Boltzmann distribution'.format( \
-            mean_th, np.sqrt(var_th)))
+    print(
+        'mean: {}, std: {} of ML-predicted Boltzmann distribution'.format(
+            np.mean(x0_val), np.std(x0_val)
+        )
+    )
+    print(
+        'mean: {}, std: {} of theoretical Boltzmann distribution'.format(
+            mean_th, np.sqrt(var_th)
+        )
+    )
 
     plt.hist(x0_val, bins=500, density=True, label=r'ML $\mu$')
     plt.hist(x_calc, bins=500, density=True, label=r'Calculated')
@@ -94,8 +99,8 @@ def load_model(input_dim, hidden_dim, output_dim, lr):
 
 
 def forward_process(
-    model, loss_fnc, optimizer, tau, batch_size,
-    t_0, t_1, dt, sigma_q, accum_loss, i
+    model, loss_fnc, optimizer, tau,
+    batch_size, t_0, t_1, dt, sigma_q, i
 ):
     x0 = np.random.normal(0, np.sqrt(tau), size=batch_size)
     # sample t in [0, 1 - dt] to avoid exceeding time range when
@@ -117,12 +122,11 @@ def forward_process(
     features = torch.stack((xt_plus_dt, t_plus_dt), dim=1)
     prediction = model(features).squeeze()
     batch_loss = loss_fnc(input=prediction, target=xt)
-    accum_loss += batch_loss.item()
     batch_loss.backward()
     optimizer.step()
 
     if i % 10 == 0:
-        print(f'Epoch {i}, Loss: {accum_loss:.5f}')
+        print(f'Epoch {i}, Loss: {batch_loss.item():.5f}')
 
 
 def reverse_process(model, sigma_q, t_1, num_t, dt):
@@ -157,7 +161,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hidden_size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=0.0001)
-    parser.add_argument('--epochs', type=int, default=3000)
+    parser.add_argument('--epochs', type=int, default=300)
 
     args = parser.parse_args()
 
