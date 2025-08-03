@@ -1,21 +1,16 @@
-# adjoint.py is a 1D toy implementation of adjoint sampling, based on
-# pseudocode on p. 6 from Havens et al.'s preprint "Adjoint Sampling: Highly
-# Scalable Diffusion Samplers via Adjoint Matching"; in this program, a drift
-# function in an SDE is trained to sample from a 2D Boltzmann distribution
-# using the adjoint matching algorithm
+# if energy is a simple harmonic well, run
+# python adjoint.py well.csv
 #
-# example of how to run (if energy is a single well):
-# python adjoint.py test.csv
+# if energy is -log of the Gaussian mixture model, run
+# python adjoint.py gmm.csv --epochs 400 --energy_type 'gmm' --n_paths 1000
 
 import argparse
 import csv
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 import random
-import torch
 from scipy.stats import multivariate_normal
-from sklearn.preprocessing import normalize
+import torch
 
 from model import *
 from buffer import *

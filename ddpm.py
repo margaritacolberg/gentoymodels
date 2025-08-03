@@ -1,9 +1,3 @@
-# ddpm.py is a 1D toy implementation of DDPM, based on Pseudocode 1 and 2 on p.
-# 11 from Nakkiran et al.'s "Step-by-Step Diffusion: An Elementary Tutorial";
-# in this program, a neural net is trained to denoise x_{t+dt} to predict x_t
-# during the forward process, and the forward process is then reversed for
-# sampling
-
 import argparse
 import math
 import matplotlib.pyplot as plt
