@@ -1,4 +1,4 @@
-# GenerativeToyModels: Diffusion-Based Generative Models for Boltzmann Sampling
+# GenToyModels: Diffusion-Based Generative Models for Boltzmann Sampling
 
 This repository contains toy model implementations of two generative methods
 for sampling from equilibrium (Boltzmann) distributions using diffusion models:
