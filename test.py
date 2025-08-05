@@ -161,7 +161,7 @@ def plot_euler_maruyama_output(n_paths, np_rng):
 
     freqs = 3
 
-    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
+    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 1, 0.001)
 
     X1 = euler_maruyama(
         t, model, num_t, dt, sigma, freqs,
@@ -195,6 +195,8 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
     num_t = int(t_1 / dt)
     t = np.linspace(t_0, t_1, num_t)
 
+    clipper = Clipper(max_norm=50.0)
+
     sigma_max = 1.5
     sigma_min = 0.05
     sigma_diff = sigma_max / sigma_min
@@ -206,7 +208,7 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
 
     freqs = 3
 
-    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 0.001)
+    model, _ = load_model(x_vec_dim + 2 * freqs, 32, x_vec_dim, 1, 0.001)
 
     # fix the noise across all paths
     dB_shared = np_rng.normal(0, np.sqrt(dt), size=(num_t, n_paths, x_vec_dim))
@@ -224,7 +226,7 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
 
         w_grad_E_serial = system.gradenergy(x1)
         grad_g_serial.append(
-            calculate_grad_g(x1, var, x_vec_dim, w_grad_E_serial)
+            calculate_grad_g(x1, var, x_vec_dim, w_grad_E_serial, clipper)
         )
 
     X1_serial = np.concatenate(X1_serial, axis=0)
@@ -237,7 +239,7 @@ def test_vectorized_euler_and_gradient(n_paths, np_rng, system):
 
     w_grad_E_vectorized = system.gradenergy(X1_vectorized)
     grad_g_vectorized = calculate_grad_g(
-        X1_vectorized, var, x_vec_dim, w_grad_E_vectorized
+        X1_vectorized, var, x_vec_dim, w_grad_E_vectorized, clipper
     )
 
     assert np.allclose(X1_serial, X1_vectorized, atol=1e-6)
