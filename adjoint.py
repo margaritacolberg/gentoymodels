@@ -57,8 +57,8 @@ def main(args):
         avg_w_grad_E = np.zeros(args.epochs)
 
     # geometric noise schedule
-    sigma_max = 1.5
-    sigma_min = 0.05
+    sigma_max = 1.0
+    sigma_min = 1e-3
     sigma_diff = sigma_max / sigma_min
     sigma = lambda time: (
         sigma_min * sigma_diff**(1 - time) * (2 * np.log(sigma_diff))**0.5
@@ -150,7 +150,7 @@ def main(args):
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
     X1_val = euler_maruyama(
-        t, model, num_t, dt, sigma, freqs, x_vec_dim, 1000, None, np_rng
+        t, model, num_t, dt, sigma, freqs, x_vec_dim, 2000, None, np_rng
     )
 
     epochs = np.arange(0, args.epochs, 1)
