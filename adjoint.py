@@ -277,7 +277,7 @@ def euler_maruyama(
         with torch.no_grad():
             u_theta = model(features).numpy()
 
-        x[i+1] = x[i] + (u_theta * dt) + (sigma(t[i]) * dB[i])
+        x[i+1] = x[i] + (sigma(t[i]) * u_theta * dt) + (sigma(t[i]) * dB[i])
 
     return x[-1]
 
@@ -334,7 +334,7 @@ def get_Xt_label_weight(
     if np.any(var_Xt < 0):
         raise ValueError('one or more t values have negative var')
 
-    std_Xt = np.sqrt(np.maximum(var_Xt, np.float32(0.0)))[:, None]
+    std_Xt = np.sqrt(var_Xt)[:, None]
 
     Xt = np_rng.normal(loc=mean_Xt, scale=std_Xt)
 
