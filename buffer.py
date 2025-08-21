@@ -8,10 +8,14 @@ class BatchBuffer:
         self.buffer_size = buffer_size
         self.data = deque(maxlen=buffer_size)  # automatically drops old data
 
-    def add(self, X1_batch, grad_g_batch):
-        # both X1_batch, grad_g_batch are of shape (n_paths, x_vec_dim)
-        pairs = np.concatenate([X1_batch, grad_g_batch], axis=1)
-        for row in pairs:
+    def add(self, *arrays):
+        # all input arrays should be of shape (n_paths, x_vec_dim)
+        assert all(arr.shape[0] == arrays[0].shape[0] for arr in arrays), (
+                "all input arrays must have the same batch size"
+        )
+
+        inputs = np.concatenate(arrays, axis=1)
+        for row in inputs:
             self.data.append(row)
 
     def sample(self, batch_size, np_rng):
