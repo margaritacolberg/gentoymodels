@@ -29,6 +29,12 @@ def main(args):
     num_t = int(t_1 / dt)
     t = np.linspace(t_0, t_1, num_t)
 
+    freqs = 3
+
+    # cache Fourier embeddings
+    t_fourier = torch.tensor(fourier(t, freqs), dtype=torch.float32)
+    t_1_fourier = torch.tensor(fourier([1.0], freqs), dtype=torch.float32)
+
     tau = 1.0
     buffer = BatchBuffer(buffer_size=args.n_paths)
     clipper = Clipper(max_norm=args.max_score_norm)
@@ -63,8 +69,6 @@ def main(args):
     # output: u(Xt, t)
     output_size = x_vec_dim
 
-    freqs = 3
-
     model, optimizer = load_model(
         input_size + 2 * freqs, args.hidden_size, output_size, args.num_hidden,
         args.lr
@@ -79,8 +83,8 @@ def main(args):
         )
 
         X1 = euler_maruyama_wrap(
-            t, model, num_t, dt, sigma, freqs, x_vec_dim, args.n_paths, dB,
-            np_rng
+            t, model, num_t, dt, sigma, x_vec_dim, args.n_paths, dB, np_rng,
+            t_fourier
         )
 
         # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
@@ -104,7 +108,7 @@ def main(args):
 
         loss[j] = accum_loss
 
-        drift.append(drift_per_epoch(freqs, X1, model))
+        drift.append(drift_per_epoch(freqs, X1, model, t_1_fourier))
 
         if args.energy_type == 'gmm':
             avg_w_grad_E[j] = np.mean(system.gradenergy(X1))
@@ -117,7 +121,7 @@ def main(args):
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
     X1_val = euler_maruyama_wrap(
-        t, model, num_t, dt, sigma, freqs, x_vec_dim, 2000, None, np_rng
+        t, model, num_t, dt, sigma, x_vec_dim, 2000, None, np_rng, t_fourier
     )
 
     epochs = np.arange(0, args.epochs, 1)
@@ -210,13 +214,10 @@ def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
 
 
 def euler_maruyama(
-    t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, dB, np_rng, x
+    t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, x, t_fourier
 ):
     if dB is None:
         dB = np_rng.normal(0, np.sqrt(dt), size=(num_t, n_paths, x_vec_dim))
-
-    t_fourier = fourier(t, freqs)
-    t_fourier = torch.tensor(t_fourier, dtype=torch.float32)
 
     # Euler-Maruyama with no gradient
     for i in range(num_t - 1):
@@ -234,13 +235,14 @@ def euler_maruyama(
 
 
 def euler_maruyama_wrap(
-    t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, dB, np_rng
+    t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, t_fourier
 ):
     # Dirac distribution at t = 0
     x = np.zeros((num_t, n_paths, x_vec_dim))
 
     X1 = euler_maruyama(
-        t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, dB, np_rng, x
+        t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, x,
+        t_fourier
     )
 
     return X1
@@ -385,11 +387,9 @@ def fourier(t, freqs):
     return emb
 
 
-def drift_per_epoch(freqs, X1, model):
+def drift_per_epoch(freqs, X1, model, t_1_fourier):
     # only need time at the endpoint of each path
-    t_1_fourier = fourier([1.0], freqs)
-    t_1 = torch.tensor(t_1_fourier, dtype=torch.float32).repeat(X1.shape[0], 1)
-
+    t_1 = t_1_fourier.repeat(X1.shape[0], 1)
     X1 = torch.tensor(X1, dtype=torch.float32)
 
     features = torch.cat((X1, t_1), dim=1)

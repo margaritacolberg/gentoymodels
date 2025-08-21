@@ -24,6 +24,12 @@ def main(args):
     num_t = int(t_1 / dt)
     t = np.linspace(t_0, t_1, num_t)
 
+    freqs = 3
+
+    # cache Fourier embeddings
+    t_fourier = torch.tensor(adj.fourier(t, freqs), dtype=torch.float32)
+    t_1_fourier = torch.tensor(adj.fourier([1.0], freqs), dtype=torch.float32)
+
     tau = 1.0
     buffer_adj = BatchBuffer(buffer_size=args.n_paths)
     buffer_crt = BatchBuffer(buffer_size=args.n_paths)
@@ -58,8 +64,6 @@ def main(args):
     # output: u(Xt, t)
     output_size = x_vec_dim
 
-    freqs = 3
-
     model_adj, optimizer_adj = adj.load_model(
         input_size + 2 * freqs, args.hidden_size, output_size, args.num_hidden,
         args.lr
@@ -80,8 +84,8 @@ def main(args):
             )
 
             X0, X1 = euler_maruyama_wrap(
-                t, model_adj, num_t, dt, sigma, freqs, x_vec_dim, args.n_paths,
-                dB, np_rng
+                t, model_adj, num_t, dt, sigma, x_vec_dim, args.n_paths, dB,
+                np_rng, t_fourier
             )
 
             # to get var of X1, integrate sigma(t)^2 from 0 to 1 to find
@@ -106,7 +110,9 @@ def main(args):
                 )
 
             if i == args.stage - 1:
-                drift.append(adj.drift_per_epoch(freqs, X1, model_adj))
+                drift.append(
+                    adj.drift_per_epoch(freqs, X1, model_adj, t_1_fourier)
+                )
                 avg_w_grad_E[j] = np.mean(system.gradenergy(X1))
 
             print(
@@ -121,8 +127,8 @@ def main(args):
             )
 
             X0, X1 = euler_maruyama_wrap(
-                t, model_adj, num_t, dt, sigma, freqs, x_vec_dim, args.n_paths,
-                dB, np_rng
+                t, model_adj, num_t, dt, sigma, x_vec_dim, args.n_paths, dB,
+                np_rng, t_fourier
             )
 
             buffer_crt.add(X0, X1)
@@ -141,7 +147,8 @@ def main(args):
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
     X0_val, X1_val = euler_maruyama_wrap(
-        t, model_adj, num_t, dt, sigma, freqs, x_vec_dim, 2000, None, np_rng
+        t, model_adj, num_t, dt, sigma, x_vec_dim, 2000, None, np_rng,
+        t_fourier
     )
 
     X0_x_slice = X0_val[:, 0]
@@ -188,7 +195,7 @@ def main(args):
 
 
 def euler_maruyama_wrap(
-    t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, dB, np_rng
+    t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, t_fourier
 ):
     x = np.zeros((num_t, n_paths, x_vec_dim))
 
@@ -196,7 +203,8 @@ def euler_maruyama_wrap(
     x[0] = np_rng.standard_normal((n_paths, x_vec_dim))
 
     X1 = adj.euler_maruyama(
-        t, model, num_t, dt, sigma, freqs, x_vec_dim, n_paths, dB, np_rng, x
+        t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, x,
+        t_fourier
     )
 
     return x[0], X1
