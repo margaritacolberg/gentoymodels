@@ -491,7 +491,7 @@ def plot_avg_w_grad_E_vs_epoch(epochs, avg_w_grad_E):
     plt.close()
 
 
-def plot_drift_vs_epoch(epochs, drift): 
+def plot_drift_vs_epoch(epochs, drift):
     drift = np.array(drift)
     mean_drift_dim0 = drift.mean(axis=1)[:, 0]
     plt.plot(epochs, mean_drift_dim0)
