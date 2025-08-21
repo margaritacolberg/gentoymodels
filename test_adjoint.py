@@ -49,7 +49,9 @@ def test_gmm_gradients():
     covs = [cov1, cov2]
     weights = [w1, w2]
 
-    system, m, W, gmm = create_normalized_gmm_system(mus, covs, weights, tau=1.0)
+    system, m, W, gmm = create_normalized_gmm_system(
+        mus, covs, weights, tau=1.0
+    )
 
     points = np.array([
         [-1.0, -0.5],       # between the modes
@@ -81,7 +83,9 @@ def test_affine_system_energy():
     covs = [cov1, cov2]
     weights = [w1, w2]
 
-    system, m, W, gmm = create_normalized_gmm_system(mus, covs, weights, tau=1.0)
+    system, m, W, gmm = create_normalized_gmm_system(
+        mus, covs, weights, tau=1.0
+    )
     affine = AffineSystem(gmm, W, m)
 
     points = np.array([
