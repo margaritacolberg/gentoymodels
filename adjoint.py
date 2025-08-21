@@ -2,7 +2,7 @@
 # python adjoint.py well.csv
 #
 # if energy is -log of the Gaussian mixture model, run
-# python adjoint.py gmm.csv --epochs 400 --energy_type 'gmm' --n_paths 1000
+# python adjoint.py gmm.csv --energy_type 'gmm'
 
 import argparse
 import csv
@@ -40,10 +40,10 @@ def main(args):
         mu2 = np.array([-4.0, -4.0])
         cov2 = np.array([[1.0, 0.0], [0.0, 2.0]])
 
-        # weights
         w1, w2 = 0.5, 0.5
 
-        # whitening
+        # whitening: transform GMM so that target density has mean 0 and
+        # identity covariance to stabilize training
         m, W = mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2)
 
         gmm = GMMSystem(
@@ -74,8 +74,8 @@ def main(args):
     freqs = 3
 
     model, optimizer = load_model(
-        input_size + 2 * freqs, args.hidden_size,
-        output_size, args.num_hidden, args.lr
+        input_size + 2 * freqs, args.hidden_size, output_size, args.num_hidden,
+        args.lr
     )
 
     loss = np.zeros(args.epochs)
@@ -104,7 +104,7 @@ def main(args):
         buffer.add(X1, grad_g)
 
         accum_loss = 0
-        for k in range(args.n_inner_loop):
+        for _ in range(args.n_inner_loop):
             sample_buffer = buffer.sample(args.batch_size, np_rng)
             # sample t uniformly in [0,1) independent of Euler-Maruyama grid
             # (since this grid is coarse) to train drift at arbitrary times
@@ -267,7 +267,6 @@ def euler_maruyama(
     t_fourier = torch.tensor(t_fourier, dtype=torch.float32)
 
     # Euler-Maruyama with no gradient
-    # https://ipython-books.github.io/134-simulating-a-stochastic-differential-equation/
     for i in range(num_t - 1):
         x_i = torch.tensor(x[i], dtype=torch.float32)
         t_i = t_fourier[i].repeat(n_paths, 1)
@@ -340,7 +339,8 @@ def get_Xt_label_weight(
 
     sigmas = sigma(sample_t)[:, None]
     label = -sigmas * grad_g
-    weight = np.full((batch_size, x_vec_dim), 0.5) / (sigmas ** 2)
+    # weight for numerical stability
+    weight = np.full((batch_size, x_vec_dim), 0.5) / (sigmas**2)
 
     return Xt, label, weight
 
@@ -447,7 +447,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--n_inner_loop', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=256)
-    parser.add_argument('--n_paths', type=int, default=100)
+    parser.add_argument('--n_paths', type=int, default=1000)
     parser.add_argument('--max_score_norm', type=float, default=50.0)
     parser.add_argument('--energy_type', type=str, default='well',
                         choices=['well', 'gmm'])
