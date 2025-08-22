@@ -274,13 +274,18 @@ def mean_std_for_norm(mu1, mu2, cov1, cov2, w1, w2):
 
 
 def get_Xt_label_weight(
-    sample_t, sigma, dt, sigma_max, sigma_diff, x_vec_dim, batch_size, np_rng,
-    X1, grad_g, multiplier
+    sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff, x_vec_dim,
+    batch_size, np_rng
 ):
     sample_t = np.array(sample_t)
     assert sample_t.ndim == 1, (
         'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
     )
+
+    # choose Xt from a distribution of paths passing through Xt that all end at
+    # X1; the distribution at t = 1 is a Dirac delta with mean X1 and var 0
+    X1 = sample_buffer[:, :x_vec_dim]
+    grad_g = sample_buffer[:, x_vec_dim:]
 
     c_s = sigma_diff**(-2 * sample_t)
     c_1 = sigma_diff**(-2)
@@ -301,24 +306,7 @@ def get_Xt_label_weight(
     sigmas = sigma(sample_t)[:, None]
     label = -sigmas * grad_g
     # weight for numerical stability
-    weight = np.full((batch_size, x_vec_dim), multiplier) / (sigmas**2)
-
-    return Xt, label, weight
-
-
-def get_Xt_label_weight_wrap(
-    sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff, x_vec_dim,
-    batch_size, np_rng
-):
-    # choose Xt from a distribution of paths passing through Xt that all end at
-    # X1; the distribution at t = 1 is a Dirac delta with mean X1 and var 0
-    X1 = sample_buffer[:, :x_vec_dim]
-    grad_g = sample_buffer[:, x_vec_dim:]
-
-    Xt, label, weight = get_Xt_label_weight(
-        sample_t, sigma, dt, sigma_max, sigma_diff, x_vec_dim, batch_size,
-        np_rng, X1, grad_g, 0.5
-    )
+    weight = np.full((batch_size, x_vec_dim), 0.5) / (sigmas**2)
 
     return Xt, label, weight
 
@@ -353,7 +341,7 @@ def train_drift(
     # this grid is coarse) to train drift at arbitrary times
     sample_t = np_rng.random(batch_size)
 
-    Xt, label, weight = get_Xt_label_weight_wrap(
+    Xt, label, weight = get_Xt_label_weight(
         sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff, x_vec_dim,
         batch_size, np_rng
     )

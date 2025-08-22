@@ -73,6 +73,10 @@ def main(args):
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
+    # initialize corrector weights/bias to zero for unbiased start
+    for p in model_crt.parameters():
+        p.data.zero_()
+
     loss_crt = np.zeros(args.epochs_crt)
     drift = []
     for i in range(args.stage):
@@ -200,7 +204,9 @@ def euler_maruyama_wrap(
     x = np.zeros((num_t, n_paths, x_vec_dim))
 
     # Gaussian distribution at t = 0
-    x[0] = np_rng.standard_normal((n_paths, x_vec_dim))
+    mu0 = [2.0, -1.0]
+    cov0 = [1.5, 0.5]
+    x[0] = np_rng.normal(mu0, cov0, size=(n_paths, x_vec_dim))
 
     X1 = adj.euler_maruyama(
         t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, x,
@@ -210,20 +216,42 @@ def euler_maruyama_wrap(
     return x[0], X1
 
 
-def get_Xt_label_weight_wrap(
+def get_Xt_label_weight(
     sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff, x_vec_dim,
     batch_size, np_rng
 ):
+    sample_t = np.array(sample_t)
+    assert sample_t.ndim == 1, (
+        'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
+    )
+
     # choose Xt from a distribution of paths passing through Xt that all end at
     # X1; the distribution at t = 1 is a Dirac delta with mean X1 and var 0
-    X0_dim = 2
-    X1 = sample_buffer[:, X0_dim:X0_dim + x_vec_dim]
-    grad_E = sample_buffer[:, X0_dim + x_vec_dim:X0_dim + 2 * x_vec_dim]
+    X0 = sample_buffer[:, 0:x_vec_dim]
+    X1 = sample_buffer[:, x_vec_dim: 2*x_vec_dim]
+    a_t = sample_buffer[:, 2*x_vec_dim: 3*x_vec_dim]
 
-    Xt, label, weight = adj.get_Xt_label_weight(
-        sample_t, sigma, dt, sigma_max, sigma_diff, x_vec_dim, batch_size,
-        np_rng, X1, grad_E, 1.0
-    )
+    c_s = sigma_diff**(-2 * sample_t)
+    c_1 = sigma_diff**(-2)
+
+    # conditional mean and var of X_t given X_0 and X_1 under the Brownian base
+    # process, derived using Bayes' rule and completing the square on Gaussian
+    # densities
+    alpha = ((c_s - 1) / (c_1 - 1))[:, None]
+    mean_Xt = (1.0 - alpha) * X0 + alpha * X1
+    var_Xt = sigma_max**2 * (c_s - 1) * (c_s - c_1) / (c_1 - 1)
+
+    if np.any(var_Xt < 0):
+        raise ValueError('one or more t values have negative var')
+
+    std_Xt = np.sqrt(var_Xt)[:, None]
+
+    Xt = np_rng.normal(loc=mean_Xt, scale=std_Xt)
+
+    sigmas = sigma(sample_t)[:, None]
+    label = -sigmas * a_t
+    # weight for numerical stability
+    weight = np.full((batch_size, x_vec_dim), 1.0) / (sigmas**2)
 
     return Xt, label, weight
 
@@ -237,7 +265,7 @@ def train_drift(
     # this grid is coarse) to train drift at arbitrary times
     sample_t = np_rng.random(batch_size)
 
-    Xt, label, weight = get_Xt_label_weight_wrap(
+    Xt, label, weight = get_Xt_label_weight(
         sample_t, sample_buffer, sigma, dt, sigma_max, sigma_diff, x_vec_dim,
         batch_size, np_rng
     )
