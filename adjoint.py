@@ -282,8 +282,9 @@ def get_Xt_label_weight(
         'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
     )
 
-    # choose Xt from a distribution of paths passing through Xt that all end at
-    # X1; the distribution at t = 1 is a Dirac delta with mean X1 and var 0
+    # sample Xt from the Brownian bridge distribution (the conditional law of a
+    # Brownian path given end X1); at t = 1 this collapses to a Dirac delta at
+    # X1
     X1 = sample_buffer[:, :x_vec_dim]
     grad_g = sample_buffer[:, x_vec_dim:]
 
@@ -458,7 +459,7 @@ def ml_1D_slice_stats(X1_x_slice):
 
 
 def plot_1D_slices(energy_type, x, boltz_slice, X1_x_slice):
-    plt.hist(X1_x_slice, bins=200, density=True, label=r'ML-predicted')
+    plt.hist(X1_x_slice, bins=500, density=True, label=r'ML-predicted')
     plt.plot(x, boltz_slice, label='Theoretical')
     plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
     plt.xlabel('x')

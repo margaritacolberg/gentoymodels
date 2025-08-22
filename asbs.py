@@ -151,7 +151,7 @@ def main(args):
 
     # validate drift by comparing distribution of X1 to Boltzmann distribution
     X0_val, X1_val = euler_maruyama_wrap(
-        t, model_adj, num_t, dt, sigma, x_vec_dim, 2000, None, np_rng,
+        t, model_adj, num_t, dt, sigma, x_vec_dim, 3000, None, np_rng,
         t_fourier
     )
 
@@ -225,8 +225,9 @@ def get_Xt_label_weight(
         'expected sample_t to be 1D, got shape {}'.format(sample_t.shape)
     )
 
-    # choose Xt from a distribution of paths passing through Xt that all end at
-    # X1; the distribution at t = 1 is a Dirac delta with mean X1 and var 0
+    # sample Xt from the Brownian bridge distribution (the conditional law of a
+    # Brownian path given start X0 and end X1); at t = 1 this collapses to a
+    # Dirac delta at X1
     X0 = sample_buffer[:, 0:x_vec_dim]
     X1 = sample_buffer[:, x_vec_dim: 2*x_vec_dim]
     a_t = sample_buffer[:, 2*x_vec_dim: 3*x_vec_dim]
