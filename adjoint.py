@@ -459,7 +459,7 @@ def ml_1D_slice_stats(X1_x_slice):
 
 
 def plot_1D_slices(energy_type, x, boltz_slice, X1_x_slice):
-    plt.hist(X1_x_slice, bins=500, density=True, label=r'ML-predicted')
+    plt.hist(X1_x_slice, bins=300, density=True, label=r'ML-predicted')
     plt.plot(x, boltz_slice, label='Theoretical')
     plt.title(f'1D slice of Boltzmann distribution at y = 0 ({energy_type})')
     plt.xlabel('x')

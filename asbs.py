@@ -73,10 +73,6 @@ def main(args):
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
-    # initialize corrector weights/bias to zero for unbiased start
-    for p in model_crt.parameters():
-        p.data.zero_()
-
     loss_crt = np.zeros(args.epochs_crt)
     drift = []
     for i in range(args.stage):
