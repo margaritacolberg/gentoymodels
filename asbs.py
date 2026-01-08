@@ -200,8 +200,8 @@ def euler_maruyama_wrap(
 
     # Gaussian distribution at t = 0
     mu0 = [2.0, -1.0]
-    cov0 = [1.5, 0.5]
-    x[0] = np_rng.normal(mu0, cov0, size=(n_paths, x_vec_dim))
+    cov0 = [[1.5, 0.0], [0.0, 0.5]]
+    x[0] = np_rng.multivariate_normal(mu0, cov0, size=n_paths)
 
     X1 = adj.euler_maruyama(
         t, model, num_t, dt, sigma, x_vec_dim, n_paths, dB, np_rng, x,
