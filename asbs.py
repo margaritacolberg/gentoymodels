@@ -3,7 +3,6 @@ import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import random
-from scipy.stats import multivariate_normal
 import torch
 
 import adjoint as adj
