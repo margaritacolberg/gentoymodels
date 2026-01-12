@@ -43,7 +43,7 @@ def main(args):
 
         # linear interpolant path
         x_t = (1 - t) * x_0 + t * x_1
-        # velocity is constant along the path
+        # dx_t / dt = v_target; velocity is constant along the linear path
         v_target = x_1 - x_0
 
         optimizer.zero_grad()
@@ -98,7 +98,7 @@ def validate(n_traj, n_steps, model):
     x_t = torch.randn(n_traj, 2)
     t = torch.zeros(n_traj, 1)
 
-    for i in range(n_steps):
+    for _ in range(n_steps):
         features = torch.cat((x_t, t), dim=1)
         with torch.no_grad():
             v_theta = model(features)
