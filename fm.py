@@ -1,45 +1,43 @@
+# Length units: degrees
+# Angle units: Angstroms
+
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from sklearn.mixture import GaussianMixture
-
 from model import *
 
 
 def main(args):
+    system_dim = 15  # CH4 has 5 atoms, positions are in 3D
+
     # seed numpy and torch RNGs for reproducibility
     seed = 22
     torch.manual_seed(seed)
 
-    mu1 = [2.0, 2.0]
-    cov1 = [[2.0, 0.0], [0.0, 3.0]]
-    mu2 = [-4.0, -4.0]
-    cov2 = [[1.0, 0.0], [0.0, 2.0]]
-
-    w1, w2 = 0.5, 0.5
-
-    gmm = GaussianMixture(n_components=2, random_state=seed)
-    gmm.weights_ = np.array([w1, w2])
-    gmm.means_ = np.array([mu1, mu2])
-    gmm.covariances_ = np.array([cov1, cov2])
-
-    # inputs: x_t_x, x_t_y, t
-    input_size = 3
-    # output: v_x(x_t_x, x_t_y, t), v_y(x_t_x, x_t_y, t)
-    output_size = 2
+    # inputs: x, y, z, t
+    input_size = system_dim + 1
+    # output: v_x, v_y, v_z
+    output_size = system_dim
 
     model, loss_fnc, optimizer = load_model(
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
+    ch4_pos = get_ch4_positions()  # ch4_pos.shape == torch.Size([15])
+
     loss = np.zeros(args.epochs)
     for i in range(args.epochs):
-        x_0 = torch.randn(args.batch_size, 2)
-        x_1_np, _ = gmm.sample(args.batch_size)
-        x_1 = torch.from_numpy(x_1_np).float()
-        t = torch.rand(args.batch_size, 1)
+        x_0 = torch.randn(args.batch_size, system_dim)
+
+        # final distribution: noisy CH4 conformations
+        # noise.shape == torch.Size([B, 15])
+        noise = 0.001 * torch.randn(args.batch_size, system_dim)
+        # broadcast to torch.Size([B, 15])
+        x_1 = ch4_pos + noise
+
+        t = torch.rand((args.batch_size, 1))
 
         # linear interpolant path
         x_t = (1 - t) * x_0 + t * x_1
@@ -63,13 +61,20 @@ def main(args):
     n_traj = 3000
     n_steps = 300
 
-    x_1 = validate(n_traj, n_steps, model)
+    x_1_val = validate(n_traj, n_steps, system_dim, model)
+    x_1_val = np.array([reorder_ch4(xi).flatten() for xi in x_1_val])
 
-    x_slice = x_1[:, 0]
-    y_slice = x_1[:, 1]
+    rmsd = get_rmsd(ch4_pos.numpy(), x_1_val)
+    bond_lengths = get_bond_lengths(x_1_val)
+    print(f'Average C-H bond length is {np.mean(bond_lengths)} Angstoms')
+    print(f'SD of C-H bond length is {np.std(bond_lengths)} Angstoms')
+    bond_angles = get_bond_angles(x_1_val)
+    print(f'Average H-C-H bond angle is {np.mean(bond_angles)} degrees')
+    print(f'SD of H-C-H bond angle is {np.std(bond_angles)} degrees')
 
-    plot_ml_contour(x_slice, y_slice)
-    plot_theoretical_contour(gmm)
+    plot_rmsd(rmsd)
+    plot_bond_lengths(bond_lengths)
+    plot_bond_angles(bond_angles)
 
 
 def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
@@ -82,6 +87,26 @@ def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
     return model, loss_fnc, optimizer
 
 
+def get_ch4_positions():
+    C = torch.tensor([0.0, 0.0, 0.0])
+
+    # ideal tetrahedral directions
+    a = 1.09 / np.sqrt(3)  # C-H bond length approx. 1.09 Angstroms
+    H = torch.tensor([
+        [ a,  a,  a],
+        [ a, -a, -a],
+        [-a,  a, -a],
+        [-a, -a,  a],
+    ], dtype=torch.float32)
+
+    coords = torch.vstack([C, H])  # (5, 3)
+
+    # subtract geometric center
+    coords = coords - coords.mean(dim=0, keepdim=True)
+
+    return coords.view(-1)
+
+
 def plot_loss_vs_epoch(epochs, loss):
     plt.plot(np.arange(epochs), loss)
     plt.title('Loss vs. epoch')
@@ -92,10 +117,10 @@ def plot_loss_vs_epoch(epochs, loss):
     plt.close()
 
 
-def validate(n_traj, n_steps, model):
+def validate(n_traj, n_steps, system_dim, model):
     dt = 1.0 / n_steps
 
-    x_t = torch.randn(n_traj, 2)
+    x_t = torch.randn(n_traj, system_dim)
     t = torch.zeros(n_traj, 1)
 
     for _ in range(n_steps):
@@ -109,49 +134,93 @@ def validate(n_traj, n_steps, model):
     return x_t.numpy()
 
 
-def plot_ml_contour(x_slice, y_slice):
-    plt.figure(figsize=(8, 6))
-    plt.hist2d(
-        x_slice, y_slice, bins=70, range=[[-10, 10], [-10, 10]], density=True,
-        alpha=0.9
+def get_rmsd(x_ref, x_gen):
+    assert x_ref.size == x_gen[0].size, (
+        'size mismatch between reference and generated coordinates'
     )
-    plt.colorbar(label=r'Density')
-    plt.title(f'Flow matching samples (t=1)')
-    plt.xlabel('x')
-    plt.ylabel('y')
+
+    diff = x_ref - x_gen
+    rmsd = np.sqrt(np.sum(diff**2, axis=1) / x_ref.size)
+
+    return rmsd
+
+
+def plot_rmsd(rmsd):
+    plt.hist(rmsd, bins=200)
+    plt.xlabel('CH4 RMSD')
+    plt.ylabel('Frequency')
     plt.tight_layout()
-    plt.savefig(f'fm_2d_ml.png')
+    plt.savefig('rmsd.png')
     plt.close()
 
 
-def plot_theoretical_contour(gmm):
-    npoints = 500
+def reorder_ch4(x):
+    x = x.reshape(5, 3)
+    d = np.linalg.norm(x[:, None, :] - x[None, :, :], axis=2)  # (5, 5)
+    # each row in d matrix corresponds to distance between atom and all other
+    # atoms; sort distances, ignoring self-distance
+    sort_d = np.sort(d, axis=1)[:, 1:5]  # (5, 4)
+    # min std will always be for C, since C's nearest neighbours are 4 H, but
+    # for each H, the nearest neighbors are 1 C, 3 H which gives larger std
+    carbon_ind = np.argmin(sort_d.std(axis=1))
+    order = [carbon_ind] + [i for i in range(5) if i != carbon_ind]
 
-    x = np.linspace(-8.0, 8.0, npoints)
-    y = np.linspace(-8.0, 8.0, npoints)
-    X, Y = np.meshgrid(x, y)
-    XY = np.column_stack([X.ravel(), Y.ravel()])
+    return x[order]
 
-    Z = np.zeros(XY.shape[0])
-    for i in range(gmm.n_components):
-        mu = gmm.means_[i]
-        cov = gmm.covariances_[i]
-        diff = XY - mu
-        inv_cov = np.linalg.inv(cov)
-        exponent = -0.5 * np.sum(diff @ inv_cov * diff, axis=1)
-        Z_i = np.exp(exponent) / (2 * np.pi * np.sqrt(np.linalg.det(cov)))
-        Z += gmm.weights_[i] * Z_i
 
-    Z = Z.reshape(npoints, npoints)
+def get_bond_lengths(x_gen):
+    # x_gen: (n_traj, 15) flattened, 5 atoms * 3 coords
+    x_gen = x_gen.reshape(-1, 5, 3)  # (n_traj, 5, 3)
+    C_pos = x_gen[:, 0, :]  # (n_traj, 3)
+    H_pos = x_gen[:, 1:, :]  # (n_traj, 4, 3)
 
-    plt.figure(figsize=(10, 8))
-    plt.contourf(x, y, Z, levels=50)
-    plt.colorbar(label=r'Density')
-    plt.title(f'Target GMM density')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    # calculate bond length for each H and trajectory
+    d = np.linalg.norm(H_pos - C_pos[:, np.newaxis, :], axis=2)  # (n_traj, 4)
+
+    return d.flatten()
+
+
+def plot_bond_lengths(bond_lengths):
+    plt.hist(bond_lengths, bins=200)
+    plt.xlabel('CH4 bond lengths ($\\AA$)')
+    plt.ylabel('Frequency')
     plt.tight_layout()
-    plt.savefig(f'fm_2d_th.png')
+    plt.savefig('bond_lengths.png')
+    plt.close()
+
+
+def get_bond_angles(x_gen):
+    x_gen = x_gen.reshape(-1, 5, 3)
+    C_pos = x_gen[:, 0, :]
+    H_pos = x_gen[:, 1:, :]
+
+    num_H = H_pos[0].shape[0]
+
+    angles = []
+    for i in range(num_H):
+        for j in range(i+1, num_H):
+            vec1 = H_pos[:, i, :] - C_pos  # (n_traj, 3)
+            vec2 = H_pos[:, j, :] - C_pos
+
+            dot = np.sum(vec1 * vec2, axis=1)  # (n_traj, )
+            vec1_norm = np.linalg.norm(vec1, axis=1)  # (n_traj, )
+            vec2_norm = np.linalg.norm(vec2, axis=1)
+
+            cos_theta = dot / (vec1_norm * vec2_norm)
+            cos_theta = np.clip(cos_theta, -1.0, 1.0)
+
+            theta = np.arccos(cos_theta)
+            angles.append(theta)  # radians
+
+    return np.concatenate(angles) * (180 / np.pi)
+
+
+def plot_bond_angles(bond_angles):
+    plt.hist(bond_angles, bins=200)
+    plt.xlabel('CH4 bond angles (degrees)')
+    plt.ylabel('Frequency')
+    plt.tight_layout()
+    plt.savefig('bond_angles.png')
     plt.close()
 
 
