@@ -1,23 +1,31 @@
-# Length units: degrees
-# Angle units: Angstroms
+# Length units: Angstroms
+# Angle units: degrees
 
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from sklearn.preprocessing import OneHotEncoder
+
 from model import *
 
 
 def main(args):
-    system_dim = 15  # CH4 has 5 atoms, positions are in 3D
+    n_atoms = 5  # CH4 has 5 atoms
+    system_dim = n_atoms * 3  # positions are in 3D
 
     # seed numpy and torch RNGs for reproducibility
     seed = 22
     torch.manual_seed(seed)
 
-    # inputs: x, y, z, t
-    input_size = system_dim + 1
+    atom_vocab = [1, 6, 7, 8]  # H, C, N, O
+    charge_vocab = [-1, 0, 1]
+
+    vocab_size = len(atom_vocab) + len(charge_vocab)
+
+    # inputs: x, y, z, graph nodes, graph edges, t
+    input_size = system_dim + (n_atoms * vocab_size) + n_atoms**2 + 1
     # output: v_x, v_y, v_z
     output_size = system_dim
 
@@ -25,27 +33,33 @@ def main(args):
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
-    ch4_pos = get_ch4_positions()  # ch4_pos.shape == torch.Size([15])
+    ch4_pos = get_ch4_positions()
+
+    graph = convert_to_graph(
+        atom_vocab, charge_vocab, [6, 1, 1, 1, 1], [0, 0, 0, 0, 0], ch4_pos
+    )
+    V_batch, E_batch = make_graph_batch(graph, args.batch_size)
 
     loss = np.zeros(args.epochs)
     for i in range(args.epochs):
-        x_0 = torch.randn(args.batch_size, system_dim)
+        x_0 = torch.randn(args.batch_size, n_atoms, 3)
 
         # final distribution: noisy CH4 conformations
-        # noise.shape == torch.Size([B, 15])
-        noise = 0.001 * torch.randn(args.batch_size, system_dim)
-        # broadcast to torch.Size([B, 15])
-        x_1 = ch4_pos + noise
+        noise = 0.001 * torch.randn(args.batch_size, n_atoms, 3)  # (B, 5, 3)
+        x_1 = ch4_pos + noise  # broadcast ch4_pos to (B, 5, 3)
 
-        t = torch.rand((args.batch_size, 1))
+        t = torch.rand((args.batch_size, 1)).unsqueeze(1)
 
         # linear interpolant path
         x_t = (1 - t) * x_0 + t * x_1
         # dx_t / dt = v_target; velocity is constant along the linear path
         v_target = x_1 - x_0
 
+        x_t = x_t.flatten(start_dim=1)
+        v_target = v_target.flatten(start_dim=1)
+
         optimizer.zero_grad()
-        features = torch.cat((x_t, t), dim=1)
+        features = torch.cat((x_t, V_batch, E_batch, t.squeeze(1)), dim=1)
         prediction = model(features)
         batch_loss = loss_fnc(input=prediction, target=v_target)
         batch_loss.backward()
@@ -61,14 +75,13 @@ def main(args):
     n_traj = 3000
     n_steps = 300
 
-    x_1_val = validate(n_traj, n_steps, system_dim, model)
-    x_1_val = np.array([reorder_ch4(xi).flatten() for xi in x_1_val])
+    x_1_val = validate(n_traj, n_steps, graph, n_atoms, model)
 
     rmsd = get_rmsd(ch4_pos.numpy(), x_1_val)
-    bond_lengths = get_bond_lengths(x_1_val)
+    bond_lengths = get_bond_lengths(x_1_val, n_atoms)
     print(f'Average C-H bond length is {np.mean(bond_lengths)} Angstoms')
     print(f'SD of C-H bond length is {np.std(bond_lengths)} Angstoms')
-    bond_angles = get_bond_angles(x_1_val)
+    bond_angles = get_bond_angles(x_1_val, n_atoms)
     print(f'Average H-C-H bond angle is {np.mean(bond_angles)} degrees')
     print(f'SD of H-C-H bond angle is {np.std(bond_angles)} degrees')
 
@@ -104,7 +117,68 @@ def get_ch4_positions():
     # subtract geometric center
     coords = coords - coords.mean(dim=0, keepdim=True)
 
-    return coords.view(-1)
+    return coords
+
+
+def convert_to_graph(atom_vocab, charge_vocab, Z, Q, coords):
+    atom_to_index = {z: i for i, z in enumerate(atom_vocab)}
+    one_hot_Z = encode_element_types(Z, atom_vocab, atom_to_index)
+
+    charge_to_index = {q: i for i, q in enumerate(charge_vocab)}
+    one_hot_Q = encode_element_types(Q, charge_vocab, charge_to_index)
+
+    # nodes
+    V = np.concatenate([one_hot_Z, one_hot_Q], axis=1)
+
+    assert coords.ndim == 2 and coords.shape[1] == 3
+
+    # edges
+    n_atoms = coords.shape[0]
+    E = np.zeros((n_atoms, n_atoms), dtype=int)
+
+    cutoff = 1.2  # Angstoms, slightly longer than C-H bond
+
+    for i in range(n_atoms):
+        for j in range(i+1, n_atoms):
+            d = np.linalg.norm(coords[i] - coords[j])
+            if d <= cutoff:
+                E[i, j] = 1
+                E[j, i] = 1
+
+    return {'V': V, 'E': E}
+
+
+def encode_element_types(elements, element_vocab, element_to_index):
+    n_elements = len(elements)
+    n_types = len(element_vocab)
+
+    one_hot = np.zeros((n_elements, n_types), dtype=int)
+
+    for i, e in enumerate(elements):
+        if e not in element_to_index:
+            raise ValueError(f'Unknown atom or charge type, {e}')
+
+        one_hot[i, element_to_index[e]] = 1
+
+    return one_hot
+
+
+def make_graph_batch(graph, batch_size):
+    V = torch.from_numpy(
+        np.broadcast_to(
+            graph['V'],
+            (batch_size, graph['V'].shape[0], graph['V'].shape[1])
+        ).copy()
+    ).flatten(start_dim=1)
+
+    E = torch.from_numpy(
+        np.broadcast_to(
+            graph['E'],
+            (batch_size, graph['E'].shape[0], graph['E'].shape[1])
+        ).copy()
+    ).flatten(start_dim=1)
+
+    return V, E
 
 
 def plot_loss_vs_epoch(epochs, loss):
@@ -117,19 +191,23 @@ def plot_loss_vs_epoch(epochs, loss):
     plt.close()
 
 
-def validate(n_traj, n_steps, system_dim, model):
+def validate(n_traj, n_steps, graph, n_atoms, model):
     dt = 1.0 / n_steps
 
-    x_t = torch.randn(n_traj, system_dim)
+    V_batch, E_batch = make_graph_batch(graph, n_traj)
+
+    x_t = torch.randn(n_traj, n_atoms, 3).flatten(start_dim=1)
     t = torch.zeros(n_traj, 1)
 
     for _ in range(n_steps):
-        features = torch.cat((x_t, t), dim=1)
+        features = torch.cat((x_t, V_batch, E_batch, t), dim=1)
         with torch.no_grad():
             v_theta = model(features)
 
         x_t += dt * v_theta
         t += dt
+
+    x_t = x_t.reshape(n_traj, n_atoms, 3)
 
     return x_t.numpy()
 
@@ -154,23 +232,7 @@ def plot_rmsd(rmsd):
     plt.close()
 
 
-def reorder_ch4(x):
-    x = x.reshape(5, 3)
-    d = np.linalg.norm(x[:, None, :] - x[None, :, :], axis=2)  # (5, 5)
-    # each row in d matrix corresponds to distance between atom and all other
-    # atoms; sort distances, ignoring self-distance
-    sort_d = np.sort(d, axis=1)[:, 1:5]  # (5, 4)
-    # min std will always be for C, since C's nearest neighbours are 4 H, but
-    # for each H, the nearest neighbors are 1 C, 3 H which gives larger std
-    carbon_ind = np.argmin(sort_d.std(axis=1))
-    order = [carbon_ind] + [i for i in range(5) if i != carbon_ind]
-
-    return x[order]
-
-
-def get_bond_lengths(x_gen):
-    # x_gen: (n_traj, 15) flattened, 5 atoms * 3 coords
-    x_gen = x_gen.reshape(-1, 5, 3)  # (n_traj, 5, 3)
+def get_bond_lengths(x_gen, n_atoms):
     C_pos = x_gen[:, 0, :]  # (n_traj, 3)
     H_pos = x_gen[:, 1:, :]  # (n_traj, 4, 3)
 
@@ -189,8 +251,7 @@ def plot_bond_lengths(bond_lengths):
     plt.close()
 
 
-def get_bond_angles(x_gen):
-    x_gen = x_gen.reshape(-1, 5, 3)
+def get_bond_angles(x_gen, n_atoms):
     C_pos = x_gen[:, 0, :]
     H_pos = x_gen[:, 1:, :]
 
