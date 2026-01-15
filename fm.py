@@ -51,7 +51,9 @@ def main(args):
     for i in range(args.epochs):
         x_0 = torch.randn(args.batch_size, n_atoms, 3)
 
-        # final distribution: noisy CH3Cl conformations
+        # final distribution: noisy conformations
+        # noise represents harmonic vibrations, thermal fluctuations, or
+        # experimental uncertainty
         noise = data['pos_noise_std'] * torch.randn(
             args.batch_size, n_atoms, 3
         )
