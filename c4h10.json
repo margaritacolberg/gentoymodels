@@ -1,0 +1,12 @@
+{
+    "molecule": "C4H10",
+    "seed": 22,
+    "n_atoms": 14,
+    "atom_vocab": [1, 6, 7, 8, 17],
+    "charge_vocab": [-1, 0, 1],
+    "target_dihedral_angles": [-180, -60, 0, 60],
+    "cutoff": 1.9,
+    "pos_noise_std": 0.001,
+    "n_traj": 3000,
+    "n_steps": 300
+}

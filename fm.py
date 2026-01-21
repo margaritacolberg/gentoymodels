@@ -10,7 +10,7 @@ import torch
 from sklearn.preprocessing import OneHotEncoder
 
 from model import *
-import build_molecule
+import molecule_conformers as mc
 import data_analysis as da
 
 
@@ -27,6 +27,7 @@ def main(args):
 
     atom_vocab = data['atom_vocab']  # H, C, N, O, Cl
     charge_vocab = data['charge_vocab']
+    heavy_atom_num = set(atom_vocab[1:])
 
     vocab_size = len(atom_vocab) + len(charge_vocab)
 
@@ -39,11 +40,25 @@ def main(args):
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
-    mol_pos = build_molecule.get_molecule_positions()
+    mol = mc.get_mol(args.smiles)
+    Z, Q = mc.get_Z_Q(mol)
+    bonds = mc.get_bonds(mol)
+    angles = mc.get_angles(mol)
+    dihedrals = mc.get_heavy_atom_dihedrals(mol, heavy_atom_num)
+
+    target_dihedral_angles = np.array(
+        data['target_dihedral_angles'], dtype=float
+    )
+    target_torsions = [
+        (i, j, k, l, angle)
+        for (i, j, k, l) in dihedrals
+        for angle in target_dihedral_angles
+    ]
+
+    conformers = mc.get_mol_conformers(args.n_confs, mol, target_torsions)
 
     graph = convert_to_graph(
-        atom_vocab, charge_vocab, data['Z'], data['Q'], data['cutoff'],
-        mol_pos
+        atom_vocab, charge_vocab, Z, Q, data['cutoff'], conformers[0]
     )
     V_batch, E_batch = make_graph_batch(graph, args.batch_size)
 
@@ -51,13 +66,15 @@ def main(args):
     for i in range(args.epochs):
         x_0 = torch.randn(args.batch_size, n_atoms, 3)
 
+        ind = torch.randint(0, args.n_confs, (args.batch_size,))
+
         # final distribution: noisy conformations
         # noise represents harmonic vibrations, thermal fluctuations, or
         # experimental uncertainty
         noise = data['pos_noise_std'] * torch.randn(
             args.batch_size, n_atoms, 3
         )
-        x_1 = mol_pos + noise  # broadcast mol_pos to (B, 5, 3)
+        x_1 = conformers[ind] + noise
 
         t = torch.rand((args.batch_size, 1)).unsqueeze(1)
 
@@ -88,13 +105,13 @@ def main(args):
 
     x_1_val = validate(n_traj, n_steps, graph, n_atoms, model)
 
-    rmsd = da.get_rmsd(mol_pos.numpy(), x_1_val)
-    bonds = da.get_bond_lengths(x_1_val, data['bonds'])
-    angles = da.get_bond_angles(x_1_val, data['angles'])
+    bonds_val = da.get_bond_lengths(x_1_val, bonds)
+    angles_val = da.get_bond_angles(x_1_val, angles)
+    dihedrals_val = da.get_dihedral_angles(x_1_val, dihedrals)
 
-    da.plot_rmsd(rmsd)
-    da.plot_bond_lengths(bonds)
-    da.plot_bond_angles(angles)
+    da.plot_bond_lengths(bonds_val)
+    da.plot_bond_angles(angles_val)
+    da.plot_dihedral_angles(dihedrals_val)
 
 
 def load_model(input_dim, hidden_dim, output_dim, num_hidden, lr):
@@ -191,10 +208,12 @@ def validate(n_traj, n_steps, graph, n_atoms, model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('json', help='json input file')
+    parser.add_argument('n_confs', type=int)
+    parser.add_argument('smiles', type=str)
     parser.add_argument('--hidden_size', type=int, default=128)
     parser.add_argument('--num_hidden', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--epochs', type=int, default=7000)
     parser.add_argument('--batch_size', type=int, default=2048)
 
     args = parser.parse_args()

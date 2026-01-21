@@ -12,23 +12,6 @@ def plot_loss_vs_epoch(epochs, loss):
     plt.close()
 
 
-def get_rmsd(x_ref, x_gen):
-    # x_ref: (n_atoms, 3), x_gen: (n_traj, n_atoms, 3)
-    diff = x_ref - x_gen
-    rmsd = np.sqrt(np.sum(diff**2, axis=(1, 2)) / x_ref.size)
-
-    return rmsd
-
-
-def plot_rmsd(rmsd):
-    plt.hist(rmsd, bins=200)
-    plt.xlabel('RMSD')
-    plt.ylabel('Frequency')
-    plt.tight_layout()
-    plt.savefig('rmsd.png')
-    plt.close()
-
-
 def get_bond_lengths(x_gen, pairs):
     """
     Parameters:
@@ -50,7 +33,7 @@ def get_bond_lengths(x_gen, pairs):
 
 
 def plot_bond_lengths(bonds):
-    plt.hist(bonds, bins=200)
+    plt.hist(bonds, bins=400)
     plt.xlabel('Bond length ($\\AA$)')
     plt.ylabel('Frequency')
     plt.tight_layout()
@@ -90,9 +73,66 @@ def get_bond_angles(x_gen, triplets):
 
 
 def plot_bond_angles(bond_angles):
-    plt.hist(bond_angles, bins=200)
+    plt.hist(bond_angles, bins=400)
     plt.xlabel(f'Bond angles (degrees)')
     plt.ylabel('Frequency')
     plt.tight_layout()
     plt.savefig('bond_angles.png')
+    plt.close()
+
+
+def get_dihedral_angles(x_gen, quartets):
+    """
+    Parameters:
+        x_gen (np.array):
+            ML-generated atomic positions with shape (n_traj, n_atoms, 3)
+        quartets (list of tuple of int):
+            list of (i, j, k, l) atom index quartets defining dihedrals,
+            where the angle is around the bond j-k
+    Returns:
+        dihedrals (np.array):
+            dihedral angles array in degrees, flattened over trajectories and
+            quartets, with shape (n_traj * n_quartets,)
+    """
+    dihedrals = []
+    for (i, j, k, l) in quartets:
+        b1 = x_gen[:, j, :] - x_gen[:, i, :]
+        b2 = x_gen[:, k, :] - x_gen[:, j, :]
+        b3 = x_gen[:, l, :] - x_gen[:, k, :]
+
+        # normal vectors to planes
+        n1 = np.cross(b1, b2)
+        n2 = np.cross(b2, b3)
+
+        n1_norm = np.linalg.norm(n1, axis=1)
+        n2_norm = np.linalg.norm(n2, axis=1)
+
+        n1_unit = n1 / n1_norm[:, None]
+        n2_unit = n2 / n2_norm[:, None]
+
+        b2_norm = np.linalg.norm(b2, axis=1)
+        b2_unit = b2 / b2_norm[:, None]
+
+        # vector perpendicular to n1_unit and b2_unit, and lies on the same
+        # plane as i-j-k
+        m1 = np.cross(n1_unit, b2_unit)
+
+        x = np.sum(n1 * n2, axis=1)
+        # calculate coordinates of n2 in the orthonormal frame formed by
+        # n1_unit, b2_unit, and m1
+        y = np.sum(m1 * n2, axis=1)
+
+        phi = np.arctan2(y, x)
+
+        dihedrals.append(phi)
+
+    return np.concatenate(dihedrals) * (180 / np.pi)
+
+
+def plot_dihedral_angles(dihedral_angles):
+    plt.hist(dihedral_angles, bins=400)
+    plt.xlabel(f'Dihedral angles (degrees)')
+    plt.ylabel('Frequency')
+    plt.tight_layout()
+    plt.savefig('dihedral_angles.png')
     plt.close()
