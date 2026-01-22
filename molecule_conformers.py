@@ -18,8 +18,8 @@ def get_mol_conformers(n_confs, mol, target_torsions=None):
             ff = AllChem.UFFGetMoleculeForceField(mol, confId=conf_id)
             for (i, j, k, l, angle) in target_torsions:
                 ff.UFFAddTorsionConstraint(
-                    i, j, k, l, relative=False, minDihedralDeg=float(angle),
-                    maxDihedralDeg=float(angle), forceConstant=100.0
+                    i, j, k, l, relative=False, minDihedralDeg=angle,
+                    maxDihedralDeg=angle, forceConstant=100.0
                 )
             ff.Minimize()
 
