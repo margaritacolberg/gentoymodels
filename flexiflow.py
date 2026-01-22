@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from sklearn.preprocessing import OneHotEncoder
-
 from model import *
 import molecule_conformers as mc
 import data_analysis as da
