@@ -5,7 +5,9 @@ models for sampling from target distributions. It includes a 1D implementation
 of the [Denoising Diffusion Probabilistic Model
 (DDPM)](https://arxiv.org/abs/2406.08929), 2D implementations of [Adjoint
 Sampling (AS)](https://arxiv.org/abs/2504.11713) and the [Adjoint Schrödinger
-Bridge Sampler (ASBS)](https://arxiv.org/abs/2506.22565), and a simplified
+Bridge Sampler (ASBS)](https://arxiv.org/abs/2506.22565), a 3-category
+implementation of [Statistical Flow Matching
+(SFM)](https://arxiv.org/abs/2405.16441), and a simplified
 [FlexiFlow](https://arxiv.org/abs/2511.17249) model for generating butane
 conformers.
 
@@ -43,13 +45,17 @@ and were tested with Python 3.13.5.
 - `flexiflow.py`: 3D implementation of FlexiFlow without joint sampling of
   conformers, using a single MLP instead of SemlaFlow for simplicity.
 
-- `model.py`: A simple MLP used by the `adjoint.py`, `asbs.py`, `ddpm.py`, and
-  `flexiflow.py` scripts.
+- `model.py`: A simple MLP used by the `adjoint.py`, `asbs.py`, `ddpm.py`,
+  `flexiflow.py`, and `sfm.py` scripts.
 
 - `molecule_conformers.py`: Generates target distributions of molecular
   conformers for training. Also extracts atomic numbers and charges for
 building molecular graphs, and computes theoretical bond lengths, bond angles,
 and dihedrals for validation.
+
+- `sfm.py`: 3-category implementation of SFM; the state space is the positive
+  orthant of a unit sphere in 3D, which corresponds to the square root of a
+3-category Dirichlet distribution.
 
 - `systems.py`: An abstraction for energy functions, energy gradients, and
   their whitened versions for Gaussian mixtures.
