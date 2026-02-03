@@ -20,6 +20,18 @@ def main(args):
     seed = data['seed']
     torch.manual_seed(seed)
 
+    if args.hidden_size is None:
+        args.hidden_size = data['model']['hidden_size']
+    if args.num_hidden is None:
+        args.num_hidden = data['model']['num_hidden']
+    if args.lr is None:
+        args.lr = data['training']['lr']
+    if args.epochs is None:
+        args.epochs = data['training']['epochs']
+    if args.batch_size is None:
+        args.batch_size = data['training']['batch_size']
+
+    smiles = data['smiles']
     n_atoms = data['n_atoms']
     system_dim = n_atoms * 3  # positions are in 3D
 
@@ -38,7 +50,7 @@ def main(args):
         input_size, args.hidden_size, output_size, args.num_hidden, args.lr
     )
 
-    mol = mc.get_mol(args.smiles)
+    mol = mc.get_mol(smiles)
     Z, Q = mc.get_Z_Q(mol)
     bonds = mc.get_bonds(mol)
     angles = mc.get_angles(mol)
@@ -207,12 +219,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('json', help='json input file')
     parser.add_argument('n_confs', type=int)
-    parser.add_argument('smiles', type=str)
-    parser.add_argument('--hidden_size', type=int, default=128)
-    parser.add_argument('--num_hidden', type=int, default=4)
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--epochs', type=int, default=7000)
-    parser.add_argument('--batch_size', type=int, default=2048)
+    parser.add_argument('--hidden_size', type=int)
+    parser.add_argument('--num_hidden', type=int)
+    parser.add_argument('--lr', type=float)
+    parser.add_argument('--epochs', type=int)
+    parser.add_argument('--batch_size', type=int)
 
     args = parser.parse_args()
 

@@ -1,5 +1,6 @@
 {
     "molecule": "C4H10",
+    "smiles": "CCCC",
     "seed": 22,
     "n_atoms": 14,
     "atom_vocab": [1, 6, 7, 8, 17],
@@ -8,5 +9,16 @@
     "cutoff": 1.9,
     "pos_noise_std": 0.001,
     "n_traj": 3000,
-    "n_steps": 300
+    "n_steps": 300,
+
+    "model": {
+      "hidden_size": 128,
+      "num_hidden": 4
+    },
+
+    "training": {
+      "lr": 0.001,
+      "epochs": 7000,
+      "batch_size": 2048
+    }
 }
