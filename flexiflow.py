@@ -8,8 +8,8 @@ import numpy as np
 import torch
 
 from model import *
-import molecule_conformers as mc
 import data_analysis as da
+import molecule_conformers as mc
 
 
 def main(args):
