@@ -15,9 +15,9 @@ def main(args):
     seed = 22
     torch.manual_seed(seed)
 
-    # inputs: number of categories, t
+    # inputs: K categories, t
     input_size = args.K + 1
-    # outputs: number of categories
+    # outputs: K velocities
     output_size = args.K
 
     model, loss_fnc, optimizer = load_model(
